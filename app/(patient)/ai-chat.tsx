@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -13,49 +13,44 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { auth } from '../../src/config/firebase';
+import { createSupportRequest, subscribePatientSupportRequests } from '../../src/services/supportRequestService';
 
 export default function AiChatScreen() {
   const router = useRouter();
   const [message, setMessage] = useState('');
   
-  // Sample conversation flow including Tagalog/English support
-  const [chatLog, setChatLog] = useState([
-    {
-      sender: 'ai',
-      text: 'Hello Mommy Maria! Kumusta ang pakiramdam mo ngayon? May gusto ka bang malaman tungkol sa iyong 31nd week of pregnancy?',
-      time: '10:00 AM',
-    },
-    {
-      sender: 'user',
-      text: 'Normal lang ba sumakit ang lower back ko ngayon?',
-      time: '10:02 AM',
-    },
-    {
-      sender: 'ai',
-      text: 'Yes Mommy, mild lower back pain is common at 31 weeks as your baby grows and your center of gravity shifts. Make sure to rest, maintain good posture, and avoid heavy lifting. However, if the pain becomes severe or is accompanied by bleeding, inform your midwife immediately!',
-      time: '10:02 AM',
-    },
-  ]);
+  const [chatLog, setChatLog] = useState<any[]>([]);
+  const [sending, setSending] = useState(false);
 
-  const handleSend = () => {
-    if (!message.trim()) return;
-    
-    // Append user message
-    const newMsg = { sender: 'user', text: message, time: 'Just now' };
-    setChatLog([...chatLog, newMsg]);
-    setMessage('');
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    return subscribePatientSupportRequests(uid, (requests) => {
+      const sortedRequests = requests.map((request) => {
+        return {
+          id: request.id,
+          text: request.message,
+          status: request.status || 'pending',
+          createdAt: request.createdAt?.toDate?.() || new Date(0),
+        };
+      }).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      setChatLog(sortedRequests);
+    });
+  }, []);
 
-    // Simulate AI response response placeholder
-    setTimeout(() => {
-      setChatLog(prev => [
-        ...prev,
-        {
-          sender: 'ai',
-          text: 'Naitala ko na po ito. Para sa sigurado, pwede nating i-discuss yan sa iyong next checkup sa Sept 21!',
-          time: 'Just now',
-        },
-      ]);
-    }, 1000);
+  const handleSend = async () => {
+    const text = message.trim();
+    if (!text || sending) return;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    setSending(true);
+    try {
+      await createSupportRequest(uid, text);
+      setMessage('');
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -68,12 +63,12 @@ export default function AiChatScreen() {
           <Ionicons name="arrow-back" size={20} color="#0F172A" />
         </TouchableOpacity>
         <View style={styles.headerTitleContainer}>
-          <Text style={styles.headerTitle}>AI Health Assistant</Text>
-          <Text style={styles.headerSubtitle}>Tagalog & English Support</Text>
+          <Text style={styles.headerTitle}>Clinic Support</Text>
+          <Text style={styles.headerSubtitle}>Send a message to clinic staff</Text>
         </View>
         <View style={styles.onlineIndicator}>
           <View style={styles.onlineDot} />
-          <Text style={styles.onlineText}>Online</Text>
+          <Text style={styles.onlineText}>Messages</Text>
         </View>
       </View>
 
@@ -88,7 +83,7 @@ export default function AiChatScreen() {
           <View style={styles.disclaimerBox}>
             <Ionicons name="information-circle-outline" size={16} color="#0284C7" style={{ marginRight: 6 }} />
             <Text style={styles.disclaimerText}>
-              This AI assistant provides general guidance. For emergencies, please contact your lying-in clinic directly.
+              Messages are sent to clinic staff for follow-up. For emergencies, contact your clinic directly.
             </Text>
           </View>
 
@@ -97,25 +92,20 @@ export default function AiChatScreen() {
               key={index} 
               style={[
                 styles.messageRow, 
-                chat.sender === 'user' ? styles.userMessageRow : styles.aiMessageRow
+                styles.userMessageRow
               ]}
             >
-              {chat.sender === 'ai' && (
-                <View style={styles.aiAvatar}>
-                  <Ionicons name="sparkles" size={14} color="#FFFFFF" />
-                </View>
-              )}
               <View 
                 style={[
                   styles.messageBubble, 
-                  chat.sender === 'user' ? styles.userBubble : styles.aiBubble
+                  styles.userBubble
                 ]}
               >
-                <Text style={[styles.messageText, chat.sender === 'user' ? styles.userText : styles.aiText]}>
+                <Text style={[styles.messageText, styles.userText]}>
                   {chat.text}
                 </Text>
-                <Text style={[styles.timeText, chat.sender === 'user' ? styles.userTime : styles.aiTime]}>
-                  {chat.time}
+                <Text style={[styles.timeText, styles.userTime]}>
+                  {chat.status === 'completed' ? 'Completed' : 'Sent'} · {chat.createdAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
                 </Text>
               </View>
             </View>
@@ -124,11 +114,11 @@ export default function AiChatScreen() {
 
         {/* Quick Suggestion Chips */}
         <View style={styles.chipsContainer}>
-          <TouchableOpacity style={styles.chip} onPress={() => setMessage('Normal ba ang sumasakit ang ulo?')}>
-            <Text style={styles.chipText}>Normal ba ang headache?</Text>
+          <TouchableOpacity style={styles.chip} onPress={() => setMessage('I would like clinic assistance.')}>
+            <Text style={styles.chipText}>Request assistance</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.chip} onPress={() => setMessage('Ano ang mga bawal kainin?')}>
-            <Text style={styles.chipText}>Mga bawal kainin</Text>
+          <TouchableOpacity style={styles.chip} onPress={() => setMessage('I have a question about my appointment.')}>
+            <Text style={styles.chipText}>Appointment question</Text>
           </TouchableOpacity>
         </View>
 
@@ -136,14 +126,14 @@ export default function AiChatScreen() {
         <View style={styles.inputContainer}>
           <TextInput
             style={styles.textInput}
-            placeholder="Magtanong dito (Tagalog or English)..."
+            placeholder="Write a message to clinic staff..."
             placeholderTextColor="#94A3B8"
             value={message}
             onChangeText={setMessage}
             multiline
           />
-          <TouchableOpacity style={styles.sendButton} activeOpacity={0.8} onPress={handleSend}>
-            <Ionicons name="send" size={16} color="#FFFFFF" />
+          <TouchableOpacity style={[styles.sendButton, sending && styles.sendButtonDisabled]} activeOpacity={0.8} onPress={handleSend} disabled={sending}>
+            <Ionicons name={sending ? 'hourglass-outline' : 'send'} size={16} color="#FFFFFF" />
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -339,5 +329,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 10,
+  },
+  sendButtonDisabled: {
+    opacity: 0.65,
   },
 });

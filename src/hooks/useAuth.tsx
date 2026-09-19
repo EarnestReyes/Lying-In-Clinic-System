@@ -59,6 +59,9 @@ export function AuthProvider({
       onAuthStateChanged(
         auth,
         async (user) => {
+          setLoading(true);
+          setUserRole(null);
+          setUserName(null);
           try {
             setFirebaseUser(user);
 

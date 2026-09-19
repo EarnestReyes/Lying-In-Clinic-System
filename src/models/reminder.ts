@@ -7,4 +7,7 @@ export interface Reminder {
   type: 'Medication' | 'Checkup' | 'Lab Test' | 'General';
   completed: boolean;
   createdAt?: any;
+  patientId?: string;
+  createdBy?: string;
+  priority?: 'normal' | 'urgent';
 }

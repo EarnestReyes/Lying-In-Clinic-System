@@ -1,5 +1,5 @@
 import { db } from '../../src/config/firebase'; // Adjust path to your firebase config if needed
-import { collection, query, where, getDocs, addDoc, updateDoc, deleteDoc, doc, Timestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, updateDoc, deleteDoc, doc, onSnapshot, Timestamp } from 'firebase/firestore';
 import { Reminder } from '../models/reminder';
 
 export const fetchRemindersForPatient = async (patientUid: string): Promise<Reminder[]> => {
@@ -51,4 +51,26 @@ export const deleteReminder = async (reminderId: string) => {
     console.error("Error deleting reminder: ", error);
     throw error;
   }
+};
+
+/** Keeps the patient portal in sync when staff add, update, or remove a reminder. */
+export const subscribeRemindersForPatient = (
+  patientUid: string,
+  onUpdate: (reminders: Reminder[]) => void,
+  onError: (error: Error) => void,
+) => {
+  const remindersQuery = query(collection(db, 'reminders'), where('patientUid', '==', patientUid));
+  return onSnapshot(remindersQuery, (snapshot) => {
+    onUpdate(snapshot.docs.map((item) => ({ id: item.id, ...item.data() } as Reminder)));
+  }, (error) => onError(error));
+};
+
+/** Used by staff/admin to send a reminder that is visible in the patient's portal. */
+export const sendReminderToPatient = async (reminder: Omit<Reminder, 'id' | 'completed'>, senderId?: string) => {
+  return addReminder({
+    ...reminder,
+    patientId: reminder.patientId || reminder.patientUid,
+    createdBy: senderId,
+    completed: false,
+  });
 };

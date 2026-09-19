@@ -15,18 +15,21 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { 
-  fetchRemindersForPatient, 
+  subscribeRemindersForPatient,
   addReminder, 
   toggleReminderStatus, 
   deleteReminder 
 } from '../../src/(patient)/remindersService';
 import { Reminder } from '../../src/models/reminder';
+import { auth } from '../../src/config/firebase';
 
 export default function PatientRemindersScreen() {
   const router = useRouter();
   
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [retryVersion, setRetryVersion] = useState(0);
   const [modalVisible, setModalVisible] = useState(false);
   
   // Form fields
@@ -36,52 +39,29 @@ export default function PatientRemindersScreen() {
   const [type, setType] = useState<'Medication' | 'Checkup' | 'Lab Test' | 'General'>('Medication');
   const [submitting, setSubmitting] = useState(false);
 
-  // Patient UID linked to your active profile session
-  const patientUid = "spCRyTr79TaIAPDQMQLN6t1keqg2";
-
-  const loadReminders = async () => {
-    try {
-      setLoading(true);
-      const data = await fetchRemindersForPatient(patientUid);
-      
-      // Fallback sample mock if DB is empty for initial UX view
-      if (data.length === 0) {
-        setReminders([
-          {
-            id: 'mock-1',
-            patientUid,
-            title: 'Prenatal Vitamins & Iron Supplement',
-            date: 'September 18, 2026',
-            time: '8:00 AM',
-            type: 'Medication',
-            completed: false,
-          },
-          {
-            id: 'mock-2',
-            patientUid,
-            title: 'Blood Pressure Monitoring',
-            date: 'September 19, 2026',
-            time: '6:00 PM',
-            type: 'Checkup',
-            completed: true,
-          },
-        ]);
-      } else {
-        setReminders(data);
-      }
-    } catch (error) {
-      console.error("Failed to load reminders", error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const patientUid = auth.currentUser?.uid;
 
   useEffect(() => {
-    loadReminders();
-  }, []);
+    if (!patientUid) {
+      setReminders([]);
+      setLoadError('Your session has expired. Please sign in again.');
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setLoadError('');
+    return subscribeRemindersForPatient(patientUid, (data) => {
+      setReminders(data);
+      setLoading(false);
+    }, (error) => {
+      console.error('Failed to subscribe to reminders', error);
+      setLoadError(error.message || 'Unable to load reminders.');
+      setLoading(false);
+    });
+  }, [patientUid, retryVersion]);
 
   const handleCreateReminder = async () => {
-    if (!title || !date || !time) {
+    if (!patientUid || !title || !date || !time) {
       Alert.alert("Missing Fields", "Please fill out title, date, and time.");
       return;
     }
@@ -102,7 +82,6 @@ export default function PatientRemindersScreen() {
       setTitle('');
       setDate('');
       setTime('');
-      loadReminders();
     } catch (error) {
       Alert.alert("Error", "Could not save reminder.");
     } finally {
@@ -112,17 +91,8 @@ export default function PatientRemindersScreen() {
 
   const handleToggle = async (id?: string, completed?: boolean) => {
     if (!id) return;
-    // Handle mock toggle locally if it's mock item, else push update to Firestore
-    if (id.startsWith('mock-')) {
-      setReminders(prev => 
-        prev.map(item => item.id === id ? { ...item, completed: !completed } : item)
-      );
-      return;
-    }
-
     try {
       await toggleReminderStatus(id, !!completed);
-      loadReminders();
     } catch (error) {
       Alert.alert("Error", "Could not update status.");
     }
@@ -130,14 +100,8 @@ export default function PatientRemindersScreen() {
 
   const handleDelete = async (id?: string) => {
     if (!id) return;
-    if (id.startsWith('mock-')) {
-      setReminders(prev => prev.filter(item => item.id !== id));
-      return;
-    }
-
     try {
       await deleteReminder(id);
-      loadReminders();
     } catch (error) {
       Alert.alert("Error", "Could not delete reminder.");
     }
@@ -167,6 +131,13 @@ export default function PatientRemindersScreen() {
           <View style={styles.loaderContainer}>
             <ActivityIndicator size="large" color="#0D9488" />
             <Text style={styles.loaderText}>Loading reminders...</Text>
+          </View>
+        ) : loadError ? (
+          <View style={styles.emptyContainer}>
+            <Ionicons name="cloud-offline-outline" size={48} color="#EF4444" />
+            <Text style={styles.emptyTitle}>Unable to Load Reminders</Text>
+            <Text style={styles.emptySub}>{loadError}</Text>
+            <TouchableOpacity style={styles.retryButton} onPress={() => setRetryVersion((version) => version + 1)}><Text style={styles.retryButtonText}>Retry</Text></TouchableOpacity>
           </View>
         ) : reminders.length === 0 ? (
           <View style={styles.emptyContainer}>
@@ -333,6 +304,8 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 4,
   },
+  retryButton: { backgroundColor: '#0D9488', borderRadius: 10, paddingHorizontal: 18, paddingVertical: 9, marginTop: 14 },
+  retryButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
   card: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,

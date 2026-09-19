@@ -7,6 +7,7 @@ import {
   serverTimestamp,
   updateDoc,
   doc,
+  onSnapshot,
 } from "firebase/firestore";
 
 import { db } from "../config/firebase";
@@ -46,3 +47,6 @@ export async function updatePayment(
     data
   );
 }
+
+export const subscribePayments = (onUpdate: (payments: Payment[]) => void, onError?: (error: Error) => void) =>
+  onSnapshot(paymentsCollection, (snapshot) => onUpdate(snapshot.docs.map((item) => ({ id: item.id, ...item.data() } as Payment))), (error) => onError?.(error));

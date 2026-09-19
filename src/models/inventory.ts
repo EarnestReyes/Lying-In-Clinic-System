@@ -20,4 +20,5 @@ export interface InventoryItem {
   lastRestocked?: string; // e.g., "Sept 1, 2026" or ISO date string
   createdAt?: any;
   updatedAt?: any;
+  isActive?: boolean;
 }

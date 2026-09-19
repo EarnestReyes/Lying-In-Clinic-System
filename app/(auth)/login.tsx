@@ -11,15 +11,14 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 
 // Import your custom authService and Firestore config
 import { authService } from '../../src/services/authService';
-import { db } from '../../src/config/firebase';
-import { doc, getDoc } from 'firebase/firestore';
 
 export default function LoginScreen() {
   const router = useRouter();
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -42,18 +41,16 @@ export default function LoginScreen() {
       const user = await authService.login(email, password);
 
       // 2. Fetch user role from Firestore to enforce portal security
-      const userDocRef = doc(db, 'users', user.uid);
-      const userDoc = await getDoc(userDocRef);
+      const userDoc = await authService.getUserProfile(user.uid);
 
-      if (!userDoc.exists()) {
+      if (!userDoc) {
         setLoading(false);
         setErrorMessage('User record not found in the database.');
         await authService.logout();
         return;
       }
 
-      const userData = userDoc.data();
-      const userRole = userData?.role; // expected: 'staff', 'midwife', or 'patient'
+      const userRole = userDoc.role; // expected: 'staff', 'midwife', or 'patient'
 
       setLoading(false);
 
@@ -69,7 +66,7 @@ export default function LoginScreen() {
       } else {
         // Mobile App: Restricted to patients
         if (userRole === 'patient') {
-          router.replace('/(patient)/home' as any);
+          router.replace(returnTo === 'check-in' ? '/check-in' : '/(patient)/home' as any);
         } else {
           setErrorMessage('Access denied. Staff and midwives must use the web portal.');
           await authService.logout();

@@ -1,10 +1,11 @@
 import { db } from '../../src/config/firebase'; // Adjust path to your firebase config if needed
-import { doc, getDoc, updateDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 
 export interface PatientProfile {
   name?: string;
   email?: string;
   phone?: string;
+  contactNumber?: string;
   pregnancyWeek?: number;
   gravidaPara?: string;
   edd?: string;

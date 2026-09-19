@@ -1,0 +1,63 @@
+// Merge INSIDE match /databases/{database}/documents in the existing rules.
+// Do not replace the application's existing rules with this fragment.
+function queueSignedIn() { return request.auth != null; }
+function queueStaff() {
+  return queueSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'staff', 'midwife'];
+}
+function queuePad(value) { return value < 10 ? '0' + string(value) : string(value); }
+function queueToday() {
+  let local = request.time + duration.value(8, 'h');
+  return string(local.year()) + '-' + queuePad(local.month()) + '-' + queuePad(local.day());
+}
+function queueAppointmentToday(a) {
+  let local = request.time + duration.value(8, 'h');
+  let months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  let legacy = months[local.month() - 1] + ' ' + string(local.day()) + ', ' + string(local.year());
+  let date = a.get('appointmentDate', a.get('date', ''));
+  return date == queueToday() || date == legacy;
+}
+function queueTransition(before, after) {
+  return (before == 'Waiting' && after in ['In Consultation', 'No-show']) ||
+    (before == 'In Consultation' && after == 'Completed');
+}
+function queuePair(id, entry) {
+  let ticket = getAfter(/databases/$(database)/documents/queueTickets/$(id)).data;
+  return ticket.day == entry.day && ticket.status == entry.status && ticket.checkedInAt == entry.checkedInAt;
+}
+match /queueEntries/{id} {
+  // A patient may read the absent deterministic document during a check-in transaction.
+  allow get: if queueStaff() || (queueSignedIn() &&
+    (!exists(/databases/$(database)/documents/queueEntries/$(id)) || resource.data.patientId == request.auth.uid));
+  allow list: if queueStaff() || (queueSignedIn() && resource.data.patientId == request.auth.uid);
+  allow create: if queueSignedIn() && validQueueEntry(id);
+  allow update: if queueStaff() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
+    queueTransition(resource.data.status, request.resource.data.status) && queuePair(id, request.resource.data);
+  allow delete: if false;
+}
+function validQueueEntry(id) {
+  let entry = request.resource.data;
+  let a = get(/databases/$(database)/documents/appointments/$(id)).data;
+  let profile = get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+  return entry.keys().hasOnly(['day', 'status', 'checkedInAt', 'patientId', 'patientName', 'appointmentTime', 'purpose']) &&
+    profile.role == 'patient' && entry.patientId == request.auth.uid &&
+    (a.get('patientId', '') == request.auth.uid || a.get('patientUid', '') == request.auth.uid) &&
+    a.status in ['confirmed', 'Confirmed', 'Scheduled', 'scheduled', 'Queue', 'queue'] && queueAppointmentToday(a) &&
+    entry.day == queueToday() && entry.status == 'Waiting' && entry.checkedInAt == request.time &&
+    entry.patientName == profile.get('fullName', a.get('patientName', '')) &&
+    entry.appointmentTime == a.get('appointmentTime', a.get('time', '')) &&
+    entry.purpose == a.get('purpose', a.get('service', 'Consultation')) && queuePair(id, entry);
+}
+match /queueTickets/{id} {
+  // Contains no names, user IDs, contact details, or appointment details.
+  allow read: if queueSignedIn();
+  allow create: if queueSignedIn() &&
+    request.resource.data.keys().hasOnly(['day', 'status', 'checkedInAt']) &&
+    request.resource.data.status == 'Waiting' && request.resource.data.day == queueToday() &&
+    request.resource.data.checkedInAt == request.time &&
+    getAfter(/databases/$(database)/documents/queueEntries/$(id)).data.patientId == request.auth.uid &&
+    queuePair(id, getAfter(/databases/$(database)/documents/queueEntries/$(id)).data);
+  allow update: if queueStaff() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
+    queueTransition(resource.data.status, request.resource.data.status) &&
+    queuePair(id, getAfter(/databases/$(database)/documents/queueEntries/$(id)).data);
+  allow delete: if false;
+}

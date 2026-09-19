@@ -16,59 +16,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
 // Import Firebase and your Inventory Service / Models
-import { db } from '../../src/config/firebase'; 
-import { collection, onSnapshot, query } from 'firebase/firestore';
-import { fetchInventoryItems, addInventoryItem } from '../../src/services/inventoryService';
+import { addInventoryItem, deleteInventoryItem, restockInventoryItem, subscribeInventoryItems } from '../../src/services/inventoryService';
 import { InventoryItem } from '../../src/models/inventory';
-
-// Fallback Mock inventory data for a lying-in clinic (used if offline or before firestore sync)
-const INITIAL_INVENTORY_DATA: InventoryItem[] = [
-  {
-    id: '1',
-    itemName: 'Iron + Folic Acid Tablets',
-    category: 'Vitamins & Supplements',
-    stock: 450,
-    unit: 'tablets',
-    minThreshold: 100,
-    lastRestocked: 'Sept 1, 2026',
-  },
-  {
-    id: '2',
-    itemName: 'Tetanus Toxoid Vaccine',
-    category: 'Vaccines',
-    stock: 14,
-    unit: 'vials',
-    minThreshold: 20,
-    lastRestocked: 'Aug 15, 2026',
-  },
-  {
-    id: '3',
-    itemName: 'Ultrasound Gel',
-    category: 'Equipment & Supplies',
-    stock: 5,
-    unit: 'bottles',
-    minThreshold: 8,
-    lastRestocked: 'Aug 10, 2026',
-  },
-  {
-    id: '4',
-    itemName: 'Disposable Examination Gloves',
-    category: 'PPE & Consumables',
-    stock: 1200,
-    unit: 'pairs',
-    minThreshold: 300,
-    lastRestocked: 'Sept 5, 2026',
-  },
-  {
-    id: '5',
-    itemName: 'Oxytocin Injection (1 IU/mL)',
-    category: 'Emergency Medications',
-    stock: 35,
-    unit: 'ampoules',
-    minThreshold: 15,
-    lastRestocked: 'Aug 28, 2026',
-  },
-];
+import { PatientRecordSearch } from '../../components/PatientRecordSearch';
+import { Picker } from '@react-native-picker/picker';
 
 export default function InventoryScreen() {
   const router = useRouter();
@@ -76,8 +27,8 @@ export default function InventoryScreen() {
   const [activeTab, setActiveTab] = useState('All');
   
   // Real-time & Service States
-  const [inventoryList, setInventoryList] = useState<InventoryItem[]>(INITIAL_INVENTORY_DATA);
-  const [loading, setLoading] = useState(false);
+  const [inventoryList, setInventoryList] = useState<InventoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -88,42 +39,31 @@ export default function InventoryScreen() {
   const [formUnit, setFormUnit] = useState('');
   const [formThreshold, setFormThreshold] = useState('');
   const [formRestocked, setFormRestocked] = useState('');
+  const [restockItem, setRestockItem] = useState<InventoryItem | null>(null);
+  const [restockQuantity, setRestockQuantity] = useState('');
+  const [restockSupplier, setRestockSupplier] = useState('');
+  const [restockBatch, setRestockBatch] = useState('');
+  const [restockExpiry, setRestockExpiry] = useState('');
+  const [restockDate, setRestockDate] = useState('');
+  const [archiveItem, setArchiveItem] = useState<InventoryItem | null>(null);
 
   // Hook up real-time Firestore synchronization listener
   useEffect(() => {
     setLoading(true);
     
-    // Optional: Initial fetch via service
-    fetchInventoryItems().then((data: any) => {
-      if (data && data.length > 0) {
-        processAndSetInventory(data);
-      }
+    const unsubscribe = subscribeInventoryItems((items) => {
+      processAndSetInventory(items);
       setLoading(false);
-    }).catch(() => setLoading(false));
-
-    // Real-time listener setup
-    const q = query(collection(db, "inventory"));
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-      const items: any = [];
-      querySnapshot.forEach((doc) => {
-        items.push({
-          id: doc.id,
-          ...doc.data(),
-        });
-      });
-      
-      if (items.length > 0) {
-        processAndSetInventory(items);
-      }
     }, (error) => {
       console.error("Error with real-time inventory snapshot: ", error);
+      setLoading(false);
     });
     
     return () => unsubscribe();
   }, []);
 
   const processAndSetInventory = (rawData: any[]) => {
-    const formatted: InventoryItem[] = rawData.map(data => {
+    const formatted: InventoryItem[] = rawData.filter(data => data.isActive !== false).map(data => {
       const stockCount = Number(data.stock) || 0;
       const threshold = Number(data.minThreshold) || 0;
       return {
@@ -148,6 +88,10 @@ export default function InventoryScreen() {
       return;
     }
 
+    if (!Number.isFinite(Number(formStock)) || Number(formStock) < 0 || (formThreshold && (!Number.isFinite(Number(formThreshold)) || Number(formThreshold) < 0))) {
+      Alert.alert('Invalid stock', 'Stock and minimum threshold must be zero or positive numbers.');
+      return;
+    }
     try {
       setActionLoading(true);
       await addInventoryItem({
@@ -165,6 +109,49 @@ export default function InventoryScreen() {
     } catch (error) {
       console.error("Error adding inventory item:", error);
       Alert.alert("Error", "Could not save the inventory item to the database.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const openRestockModal = (item: InventoryItem) => {
+    setRestockItem(item);
+    setRestockQuantity('');
+    setRestockSupplier('');
+    setRestockBatch('');
+    setRestockExpiry('');
+    setRestockDate(new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }));
+  };
+
+  const handleRestock = async () => {
+    const quantity = Number(restockQuantity);
+    if (!restockItem || !Number.isFinite(quantity) || quantity <= 0) {
+      Alert.alert('Invalid quantity', 'Enter a restock quantity greater than zero.');
+      return;
+    }
+    try {
+      setActionLoading(true);
+      await restockInventoryItem(restockItem.id, { quantity, restockDate: restockDate || 'Today', supplier: restockSupplier.trim() || undefined, batchNumber: restockBatch.trim() || undefined, expirationDate: restockExpiry.trim() || undefined });
+      setRestockItem(null);
+      Alert.alert('Restock recorded', `${quantity} ${restockItem.unit} added to ${restockItem.itemName}.`);
+    } catch (error) {
+      console.error('Error restocking inventory:', error);
+      Alert.alert('Unable to restock', 'The stock update was not saved. Please try again.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleArchiveItem = async () => {
+    if (!archiveItem) return;
+    try {
+      setActionLoading(true);
+      await deleteInventoryItem(archiveItem.id);
+      setInventoryList((items) => items.filter((item) => item.id !== archiveItem.id));
+      setArchiveItem(null);
+    } catch (error) {
+      console.error('Error archiving inventory:', error);
+      Alert.alert('Unable to archive', 'The inventory item was not archived. Please try again.');
     } finally {
       setActionLoading(false);
     }
@@ -195,64 +182,12 @@ export default function InventoryScreen() {
       {/* Outer App Shell Container */}
       <View style={styles.appShell}>
         
-        {/* Left Sidebar Menu */}
-        <View style={styles.sidebar}>
-          <View style={styles.logoContainer}>
-            <View style={styles.logoIconBox}>
-              <Ionicons name="medical" size={20} color="#FFFFFF" />
-            </View>
-            <Text style={styles.logoText}>Lying-In Clinic</Text>
-          </View>
-
-          <Text style={styles.navCategory}>Main Menu</Text>
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/dashboard' as any)}>
-            <Ionicons name="grid-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Dashboard</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/patients' as any)}>
-            <Ionicons name="people-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Patients</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/appointments' as any)}>
-            <Ionicons name="calendar-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Appointments</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.navCategory}>Other Menu</Text>
-          <TouchableOpacity style={[styles.navItem, styles.navItemActive]} activeOpacity={0.8}>
-            <Ionicons name="medkit" size={18} color="#0D9488" style={styles.navIcon} />
-            <Text style={[styles.navText, styles.navTextActive]}>Inventory</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/payments' as any)}>
-            <Ionicons name="wallet-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Financial Tracking</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.navCategory}>Help & Settings</Text>
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.replace('/(auth)/login' as any)}>
-            <Ionicons name="log-out-outline" size={18} color="#EF4444" style={styles.navIcon} />
-            <Text style={[styles.navText, { color: '#EF4444' }]}>Log Out</Text>
-          </TouchableOpacity>
-        </View>
-
         {/* Main Content Area */}
         <View style={styles.mainContent}>
           
           {/* Top Navigation Bar */}
           <View style={styles.topNavbar}>
-            <View style={styles.searchBox}>
-              <Ionicons name="search" size={16} color="#94A3B8" style={{ marginRight: 8 }} />
-              <TextInput 
-                placeholder="Search medical supplies..."
-                placeholderTextColor="#94A3B8"
-                style={styles.searchInput}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-              />
-            </View>
+            <PatientRecordSearch />
 
             <View style={styles.topNavRight}>
               <TouchableOpacity style={styles.topIconButton}>
@@ -353,6 +288,16 @@ export default function InventoryScreen() {
                           <Text style={styles.footerInfoText}>Restocked: {item.lastRestocked || 'N/A'}</Text>
                         </View>
                       </View>
+                      <View style={styles.cardActionRow}>
+                        <TouchableOpacity style={styles.restockButton} onPress={() => openRestockModal(item)} disabled={actionLoading}>
+                          <Ionicons name="add-circle-outline" size={15} color="#0D9488" />
+                          <Text style={styles.restockButtonText}>Restock</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.archiveButton} onPress={() => setArchiveItem(item)} disabled={actionLoading}>
+                          <Ionicons name="archive-outline" size={15} color="#DC2626" />
+                          <Text style={styles.archiveButtonText}>Archive</Text>
+                        </TouchableOpacity>
+                      </View>
                     </View>
                   );
                 })
@@ -394,12 +339,7 @@ export default function InventoryScreen() {
 
               <View>
                 <Text style={styles.inputLabel}>Category</Text>
-                <TextInput 
-                  style={styles.modalInput} 
-                  placeholder="e.g. Vitamins & Supplements"
-                  value={formCategory}
-                  onChangeText={setFormCategory}
-                />
+                <View style={styles.modalPicker}><Picker selectedValue={formCategory} onValueChange={setFormCategory} style={styles.picker}>{['Vitamins & Supplements', 'Vaccines', 'Equipment & Supplies', 'PPE & Consumables', 'Emergency Medications', 'General'].map((category) => <Picker.Item key={category} label={category} value={category} />)}</Picker></View>
               </View>
 
               <View style={{ flexDirection: 'row', gap: 10 }}>
@@ -439,7 +379,7 @@ export default function InventoryScreen() {
                   <Text style={styles.inputLabel}>Last Restocked</Text>
                   <TextInput 
                     style={styles.modalInput} 
-                    placeholder="e.g. Sept 15, 2026"
+                    placeholder="e.g. Sep 15, 2026"
                     value={formRestocked}
                     onChangeText={setFormRestocked}
                   />
@@ -462,6 +402,35 @@ export default function InventoryScreen() {
         </View>
       </Modal>
 
+      <Modal visible={!!restockItem} animationType="slide" transparent onRequestClose={() => setRestockItem(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}><View><Text style={styles.modalTitle}>Restock Item</Text><Text style={styles.modalSubtitle}>{restockItem?.itemName} · Current stock: {restockItem?.stock} {restockItem?.unit}</Text></View><TouchableOpacity onPress={() => setRestockItem(null)} disabled={actionLoading}><Ionicons name="close" size={20} color="#64748B" /></TouchableOpacity></View>
+            <ScrollView contentContainerStyle={{ gap: 12 }}>
+              <View><Text style={styles.inputLabel}>Quantity to Add *</Text><TextInput style={styles.modalInput} value={restockQuantity} onChangeText={setRestockQuantity} keyboardType="numeric" placeholder={`Number of ${restockItem?.unit || 'units'}`} /></View>
+              <View><Text style={styles.inputLabel}>Restock Date</Text><TextInput style={styles.modalInput} value={restockDate} onChangeText={setRestockDate} placeholder="e.g. Sept 19, 2026" /></View>
+              <View><Text style={styles.inputLabel}>Supplier (optional)</Text><TextInput style={styles.modalInput} value={restockSupplier} onChangeText={setRestockSupplier} placeholder="Supplier name" /></View>
+              <View style={{ flexDirection: 'row', gap: 10 }}><View style={{ flex: 1 }}><Text style={styles.inputLabel}>Batch No. (optional)</Text><TextInput style={styles.modalInput} value={restockBatch} onChangeText={setRestockBatch} placeholder="Batch number" /></View><View style={{ flex: 1 }}><Text style={styles.inputLabel}>Expiration (optional)</Text><TextInput style={styles.modalInput} value={restockExpiry} onChangeText={setRestockExpiry} placeholder="Date" /></View></View>
+              <TouchableOpacity style={styles.modalSubmitButton} onPress={handleRestock} disabled={actionLoading}>{actionLoading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.modalSubmitText}>Record Restock</Text>}</TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={!!archiveItem} animationType="fade" transparent onRequestClose={() => setArchiveItem(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.confirmModalContent}>
+            <View style={styles.confirmIcon}><Ionicons name="archive-outline" size={23} color="#DC2626" /></View>
+            <Text style={styles.confirmTitle}>Archive inventory item?</Text>
+            <Text style={styles.confirmText}>{archiveItem?.itemName} will be hidden from active inventory. Its restock and medication history will be preserved.</Text>
+            <View style={styles.confirmActions}>
+              <TouchableOpacity style={styles.modalCancelButton} onPress={() => setArchiveItem(null)} disabled={actionLoading}><Text style={styles.modalCancelText}>Cancel</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.confirmArchiveButton} onPress={handleArchiveItem} disabled={actionLoading}>{actionLoading ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.modalSubmitText}>Archive</Text>}</TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -475,73 +444,13 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
   },
-  sidebar: {
-    width: 240,
-    backgroundColor: '#FFFFFF',
-    borderRightWidth: 1,
-    borderRightColor: '#E2E8F0',
-    paddingVertical: 24,
-    paddingHorizontal: 16,
-  },
-  logoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 32,
-    paddingHorizontal: 8,
-  },
-  logoIconBox: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: '#0D9488',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 10,
-  },
-  logoText: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  navCategory: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#94A3B8',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginTop: 20,
-    marginBottom: 10,
-    paddingHorizontal: 8,
-  },
-  navItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    marginBottom: 4,
-  },
-  navItemActive: {
-    backgroundColor: '#CCFBF1',
-  },
-  navIcon: {
-    marginRight: 12,
-  },
-  navText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  navTextActive: {
-    color: '#0D9488',
-    fontWeight: '700',
-  },
   mainContent: {
     flex: 1,
     backgroundColor: '#F8FAFC',
     flexDirection: 'column',
   },
   topNavbar: {
+    position: 'relative', zIndex: 100, elevation: 100,
     height: 70,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
@@ -747,6 +656,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  cardActionRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#F1F5F9' },
+  restockButton: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: '#CCFBF1' },
+  restockButtonText: { color: '#0D9488', fontSize: 12, fontWeight: '700' },
+  archiveButton: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: '#FEE2E2' },
+  archiveButtonText: { color: '#DC2626', fontSize: 12, fontWeight: '700' },
   stockCountRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
@@ -808,6 +722,13 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#0F172A',
   },
+  confirmModalContent: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24, width: '100%', maxWidth: 390, alignItems: 'center' },
+  confirmIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#FEE2E2', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  confirmTitle: { fontSize: 17, fontWeight: '800', color: '#0F172A' },
+  confirmText: { fontSize: 13, lineHeight: 19, color: '#64748B', textAlign: 'center', marginTop: 8 },
+  confirmActions: { flexDirection: 'row', gap: 10, marginTop: 20, alignSelf: 'stretch', justifyContent: 'flex-end' },
+  confirmArchiveButton: { backgroundColor: '#DC2626', borderRadius: 8, paddingHorizontal: 18, paddingVertical: 10, justifyContent: 'center', alignItems: 'center' },
+  modalSubtitle: { fontSize: 12, color: '#64748B', marginTop: 2 },
   inputLabel: {
     fontSize: 12,
     fontWeight: '600',
@@ -831,6 +752,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 10,
   },
+  modalPicker: { height: 44, borderWidth: 1, borderColor: '#CFE8E5', borderRadius: 10, backgroundColor: '#F8FFFE', overflow: 'hidden', justifyContent: 'center' },
+  picker: { height: 44, color: '#0F172A', fontSize: 13 },
+  modalCancelButton: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, backgroundColor: '#F1F5F9', borderWidth: 1, borderColor: '#E2E8F0', justifyContent: 'center', alignItems: 'center' },
+  modalCancelText: { fontSize: 13, fontWeight: '700', color: '#64748B' },
   modalSubmitText: {
     color: '#FFFFFF',
     fontWeight: '700',

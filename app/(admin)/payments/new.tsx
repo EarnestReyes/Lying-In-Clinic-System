@@ -8,25 +8,24 @@ import {
   StatusBar,
   TextInput,
   TouchableOpacity,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { createPayment } from '../../../src/services/paymentService';
 
 export default function RecordFinancialScreen() {
   const router = useRouter();
 
   // Form State
-  const [patientName, setPatientName] = useState('Maria Santos');
+  const [patientName, setPatientName] = useState('');
   const [expenseItems, setExpenseItems] = useState([
-    { name: 'Prenatal Checkup', amount: '500' },
-    { name: 'Laboratory Panel', amount: '1000' },
-    { name: 'Delivery Package (NSD)', amount: '12000' },
+    { name: '', amount: '' },
   ]);
   
-  const [assistanceItems, setAssistanceItems] = useState([
-    { provider: 'PhilHealth', amount: '8000', status: 'Approved' },
-    { provider: 'LGU Assistance', amount: '3000', status: 'Approved' },
-  ]);
+  const [assistanceItems, setAssistanceItems] = useState<{ provider: string; amount: string; status: string }[]>([]);
+  const [saving, setSaving] = useState(false);
 
   // State Update Helpers
   const handleExpenseChange = (text: string, index: number, field: 'name' | 'amount') => {
@@ -46,6 +45,37 @@ export default function RecordFinancialScreen() {
   const totalAssistance = assistanceItems.reduce((acc, item) => acc + (parseFloat(item.amount) || 0), 0);
   const remainingBalance = Math.max(0, totalExpenses - totalAssistance);
 
+  const handleSave = async () => {
+    const items = expenseItems.filter((item) => item.name.trim() && Number(item.amount) > 0).map((item) => ({ name: item.name.trim(), amount: Number(item.amount) }));
+    const assistance = assistanceItems.filter((item) => item.provider.trim() && Number(item.amount) > 0).map((item) => ({ provider: item.provider.trim(), amount: Number(item.amount), status: item.status || 'Pending' }));
+    if (!patientName.trim() || !items.length) {
+      Alert.alert('Missing information', 'Enter a patient name and at least one expense with a positive amount.');
+      return;
+    }
+    try {
+      setSaving(true);
+      await createPayment({
+        patientId: '', // Legacy name-only entry; patient selection will populate this for future records.
+        patientName: patientName.trim(),
+        amount: remainingBalance,
+        description: items.map((item) => item.name).join(', '),
+        status: remainingBalance === 0 ? 'paid' : 'pending',
+        paymentDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        items,
+        assistance,
+        totalAmount: totalExpenses,
+        totalAssistance,
+        patientBalance: remainingBalance,
+      } as any);
+      Alert.alert('Financial record saved', 'Expenses and assistance were saved successfully.', [{ text: 'OK', onPress: () => router.back() }]);
+    } catch (error) {
+      console.error('Unable to save financial record:', error);
+      Alert.alert('Unable to save', 'The financial record was not saved. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
@@ -53,49 +83,6 @@ export default function RecordFinancialScreen() {
       {/* Outer App Shell Container */}
       <View style={styles.appShell}>
         
-        {/* Left Sidebar Menu */}
-        <View style={styles.sidebar}>
-          <View style={styles.logoContainer}>
-            <View style={styles.logoIconBox}>
-              <Ionicons name="medical" size={20} color="#FFFFFF" />
-            </View>
-            <Text style={styles.logoText}>Pre Clinic</Text>
-          </View>
-
-          <Text style={styles.navCategory}>Main Menu</Text>
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/dashboard' as any)}>
-            <Ionicons name="grid-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Dashboard</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/patients' as any)}>
-            <Ionicons name="people-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Patients</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/appointments' as any)}>
-            <Ionicons name="calendar-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Appointments</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.navCategory}>Other Menu</Text>
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/inventory' as any)}>
-            <Ionicons name="medkit-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Inventory</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.navItem, styles.navItemActive]} activeOpacity={0.8} onPress={() => router.push('/(admin)/payments' as any)}>
-            <Ionicons name="wallet" size={18} color="#0D9488" style={styles.navIcon} />
-            <Text style={[styles.navText, styles.navTextActive]}>Financial Tracking</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.navCategory}>Help & Settings</Text>
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.replace('/(auth)/login' as any)}>
-            <Ionicons name="log-out-outline" size={18} color="#EF4444" style={styles.navIcon} />
-            <Text style={[styles.navText, { color: '#EF4444' }]}>Log Out</Text>
-          </TouchableOpacity>
-        </View>
-
         {/* Main Content Area */}
         <View style={styles.mainContent}>
           
@@ -158,7 +145,7 @@ export default function RecordFinancialScreen() {
               {/* Itemized Expenses Section */}
               <View style={styles.sectionHeaderRow}>
                 <Text style={styles.sectionTitle}>1. Itemized Service Expenses</Text>
-                <TouchableOpacity style={styles.smallAddButton}>
+                <TouchableOpacity style={styles.smallAddButton} onPress={() => setExpenseItems((items) => [...items, { name: '', amount: '' }])}>
                   <Ionicons name="add" size={14} color="#0D9488" style={{ marginRight: 2 }} />
                   <Text style={styles.smallAddButtonText}>Add Item</Text>
                 </TouchableOpacity>
@@ -192,7 +179,7 @@ export default function RecordFinancialScreen() {
               {/* Financial Assistance Section */}
               <View style={styles.sectionHeaderRow}>
                 <Text style={styles.sectionTitle}>2. Financial Assistance Providers</Text>
-                <TouchableOpacity style={styles.smallAddButton}>
+                <TouchableOpacity style={styles.smallAddButton} onPress={() => setAssistanceItems((items) => [...items, { provider: '', amount: '', status: 'Pending' }])}>
                   <Ionicons name="add" size={14} color="#0D9488" style={{ marginRight: 2 }} />
                   <Text style={styles.smallAddButtonText}>Add Provider</Text>
                 </TouchableOpacity>
@@ -240,9 +227,8 @@ export default function RecordFinancialScreen() {
               </View>
 
               {/* Submit Action Button */}
-              <TouchableOpacity style={styles.submitButton} activeOpacity={0.8} onPress={() => router.back()}>
-                <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
-                <Text style={styles.submitButtonText}>Save Financial Record</Text>
+              <TouchableOpacity style={styles.submitButton} activeOpacity={0.8} onPress={handleSave} disabled={saving}>
+                {saving ? <ActivityIndicator color="#FFFFFF" /> : <><Ionicons name="checkmark-circle" size={18} color="#FFFFFF" style={{ marginRight: 8 }} /><Text style={styles.submitButtonText}>Save Financial Record</Text></>}
               </TouchableOpacity>
 
             </View>
@@ -264,67 +250,6 @@ const styles = StyleSheet.create({
   appShell: {
     flex: 1,
     flexDirection: 'row',
-  },
-  sidebar: {
-    width: 240,
-    backgroundColor: '#FFFFFF',
-    borderRightWidth: 1,
-    borderRightColor: '#E2E8F0',
-    paddingVertical: 24,
-    paddingHorizontal: 16,
-  },
-  logoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 32,
-    paddingHorizontal: 8,
-  },
-  logoIconBox: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: '#0D9488',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 10,
-  },
-  logoText: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  navCategory: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#94A3B8',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginTop: 20,
-    marginBottom: 10,
-    paddingHorizontal: 8,
-  },
-  navItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    marginBottom: 4,
-  },
-  navItemActive: {
-    backgroundColor: '#CCFBF1',
-  },
-  navIcon: {
-    marginRight: 12,
-  },
-  navText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  navTextActive: {
-    color: '#0D9488',
-    fontWeight: '700',
   },
   mainContent: {
     flex: 1,

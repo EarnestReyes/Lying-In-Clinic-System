@@ -9,16 +9,40 @@ import {
   TouchableOpacity,
   TextInput,
   ActivityIndicator,
+  Modal,
+  Alert,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { PatientRecordSearch } from '../../components/PatientRecordSearch';
+import { CLINIC } from '../../src/config/clinic';
+import { Colors } from '../../src/theme/colors';
+import { ClinicLocation } from '../../src/models/ClinicLocation';
+import { subscribeClinicLocation } from '../../src/services/clinicLocationService';
 
-// Firebase Imports
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { db } from '../../src/config/firebase'; // Adjust path based on your directory structure
+import { fetchPatients } from '../../src/services/patientService';
+import { sendReminderToPatient } from '../../src/(patient)/remindersService';
+import { subscribeDashboardPatients, subscribeDashboardReminders } from '../../src/services/dashboardService';
+import { subscribeQueue } from '../../src/services/queueService';
+import { useClinicDay } from '../../src/hooks/useClinicDay';
+
+type AdmissionPeriod = 'day' | 'week' | 'month' | 'year';
+const buildAdmissionBuckets = (period: AdmissionPeriod) => {
+  const today = new Date();
+  const buckets: { key: string; label: string; count: number }[] = [];
+  const add = (date: Date, label: string) => buckets.push({ key: `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`, label, count: 0 });
+  if (period === 'day') for (let index = 6; index >= 0; index--) { const date = new Date(today); date.setDate(today.getDate() - index); add(date, date.toLocaleDateString('en-US', { weekday: 'short' })); }
+  if (period === 'week') for (let index = 7; index >= 0; index--) { const date = new Date(today); date.setDate(today.getDate() - index * 7); add(date, `W${8 - index}`); }
+  if (period === 'month') for (let index = 11; index >= 0; index--) { const date = new Date(today.getFullYear(), today.getMonth() - index, 1); buckets.push({ key: `${date.getFullYear()}-${date.getMonth()}`, label: date.toLocaleDateString('en-US', { month: 'short' }), count: 0 }); }
+  if (period === 'year') for (let index = 4; index >= 0; index--) { const year = today.getFullYear() - index; buckets.push({ key: String(year), label: String(year), count: 0 }); }
+  return buckets;
+};
 
 export default function AdminDashboard() {
   const router = useRouter();
+  const queueDay = useClinicDay();
+  const [queueError, setQueueError] = useState(false);
 
   // Loading state for initial data sync
   const [loading, setLoading] = useState(true);
@@ -27,9 +51,20 @@ export default function AdminDashboard() {
   const [metrics, setMetrics] = useState({
     activePregnancies: 0,
     todayQueue: 0,
-    aiRiskFlags: 0,
+    attentionFlags: 0,
     monthlyDeliveries: 0,
   });
+  const [dashboardStats, setDashboardStats] = useState({ monthlyAdmissions: [] as { label: string; count: number }[], averageBmi: null as number | null, bmiCount: 0, bmiLabel: 'No BMI data' });
+  const [admissionPeriod, setAdmissionPeriod] = useState<AdmissionPeriod>('month');
+  const [reminders, setReminders] = useState<any[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showQuickReminder, setShowQuickReminder] = useState(false);
+  const [quickTitle, setQuickTitle] = useState('');
+  const [quickPatient, setQuickPatient] = useState<any>(null);
+  const [quickPatients, setQuickPatients] = useState<any[]>([]);
+  const [quickSearch, setQuickSearch] = useState('');
+  const [quickUrgent, setQuickUrgent] = useState(false);
+  const [clinicLocation, setClinicLocation] = useState<ClinicLocation>(CLINIC);
 
   // Real-time Firestore Listeners
   useEffect(() => {
@@ -37,16 +72,16 @@ export default function AdminDashboard() {
 
     try {
       // 1. Listen to Active Patients / Pregnancies
-      const patientsQuery = query(collection(db, "patients"));
-      const unsubscribePatients = onSnapshot(patientsQuery, (snapshot) => {
+      const unsubscribePatients = subscribeDashboardPatients((patients) => {
         let activeCount = 0;
         let riskCount = 0;
         let deliveriesCount = 0;
 
         const currentMonthYear = new Date().toLocaleString('en-US', { month: 'short', year: 'numeric' }); // e.g., "Sep 2026"
 
-        snapshot.forEach((doc) => {
-          const data = doc.data();
+        const monthlyAdmissions = buildAdmissionBuckets(admissionPeriod);
+        const bmiValues: number[] = [];
+        patients.forEach((data) => {
           
           // Count active pregnancies based on status or flags
           if (data.status === 'Active' || data.status === 'Routine' || !data.status) {
@@ -54,7 +89,7 @@ export default function AdminDashboard() {
           }
 
           // Count risk flags (e.g., elevated BP or flagged status)
-          if (data.status === 'High Risk' || data.flagColor === '#DC2626' || data.isHighRisk) {
+          if (data.status === 'Follow-up' || data.status === 'Review Required') {
             riskCount++;
           }
 
@@ -62,12 +97,29 @@ export default function AdminDashboard() {
           if (data.deliveryDate && data.deliveryDate.includes('Sep')) {
             deliveriesCount++;
           }
+          const admissionSource = data.createdAt || data.registeredAt || data.admissionDate || data.lastVisit || data.date;
+          const admissionValue = admissionSource?.toDate?.() || (admissionSource ? new Date(admissionSource) : null);
+          if (admissionValue && !Number.isNaN(admissionValue.getTime())) {
+            const admissionMidnight = new Date(admissionValue.getFullYear(), admissionValue.getMonth(), admissionValue.getDate());
+            const todayMidnight = new Date(); todayMidnight.setHours(0, 0, 0, 0);
+            const weekIndex = 7 - Math.floor((todayMidnight.getTime() - admissionMidnight.getTime()) / (7 * 24 * 60 * 60 * 1000));
+            const key = admissionPeriod === 'month' ? `${admissionValue.getFullYear()}-${admissionValue.getMonth()}` : admissionPeriod === 'year' ? String(admissionValue.getFullYear()) : `${admissionValue.getFullYear()}-${admissionValue.getMonth()}-${admissionValue.getDate()}`;
+            const bucket = admissionPeriod === 'week' ? monthlyAdmissions[weekIndex] : monthlyAdmissions.find((item) => item.key === key);
+            if (bucket) bucket.count++;
+          }
+          const heightCm = Number(data.heightCm || data.height);
+          const weightKg = Number(data.weight);
+          if (heightCm > 0 && weightKg > 0) bmiValues.push(weightKg / Math.pow(heightCm / 100, 2));
         });
+
+        const averageBmi = bmiValues.length ? bmiValues.reduce((sum, bmi) => sum + bmi, 0) / bmiValues.length : null;
+        const bmiLabel = averageBmi == null ? 'No BMI data' : averageBmi < 18.5 ? 'Underweight' : averageBmi < 25 ? 'Normal' : averageBmi < 30 ? 'Overweight' : 'Obese';
+        setDashboardStats({ monthlyAdmissions: monthlyAdmissions.map(({ label, count }) => ({ label, count })), averageBmi, bmiCount: bmiValues.length, bmiLabel });
 
         setMetrics(prev => ({
           ...prev,
-          activePregnancies: activeCount > 0 ? activeCount : snapshot.size,
-          aiRiskFlags: riskCount,
+          activePregnancies: activeCount > 0 ? activeCount : patients.length,
+          attentionFlags: riskCount,
           monthlyDeliveries: deliveriesCount > 0 ? deliveriesCount : 0, // fallback default if none logged yet
         }));
         setLoading(false);
@@ -76,26 +128,10 @@ export default function AdminDashboard() {
         setLoading(false);
       });
 
-      // 2. Listen to Today's Appointments / Queue
-      const todayStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-      const appointmentsQuery = query(collection(db, "appointments"));
-      const unsubscribeAppointments = onSnapshot(appointmentsQuery, (snapshot) => {
-        let queueCount = 0;
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          // Check if appointment is scheduled for today or matches current queue
-          if (data.date === todayStr || data.status === 'Scheduled' || data.status === 'Queue') {
-            queueCount++;
-          }
-        });
-
-        setMetrics(prev => ({
-          ...prev,
-          todayQueue: queueCount > 0 ? queueCount : snapshot.size > 0 ? snapshot.size : 0
-        }));
-      }, (error) => {
-        console.error("Error fetching appointments snapshot:", error);
-      });
+      const unsubscribeAppointments = subscribeQueue(queueDay, (tickets) => {
+        setQueueError(false);
+        setMetrics(prev => ({ ...prev, todayQueue: tickets.filter(ticket => ['Waiting', 'In Consultation'].includes(ticket.status)).length }));
+      }, () => setQueueError(true));
 
       // Cleanup listeners on unmount
       return () => {
@@ -106,7 +142,12 @@ export default function AdminDashboard() {
       console.error("Firestore connection error:", error);
       setLoading(false);
     }
-  }, []);
+  }, [admissionPeriod, queueDay]);
+
+  useEffect(() => subscribeDashboardReminders(setReminders, console.error), []);
+  useEffect(() => subscribeClinicLocation(setClinicLocation, console.error), []);
+  const openQuickReminder = async () => { const patients = await fetchPatients(); if (!patients.length) return Alert.alert('No patients', 'Add a patient before sending a reminder.'); setQuickPatients(patients); setQuickPatient(null); setQuickSearch(''); setQuickUrgent(false); setQuickTitle(''); setShowQuickReminder(true); };
+  const sendQuickReminder = async () => { if (!quickPatient || !quickTitle.trim()) return; await sendReminderToPatient({ patientUid: quickPatient.id, patientId: quickPatient.id, title: quickTitle.trim(), date: new Date().toLocaleDateString('en-US'), time: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), type: 'General', priority: quickUrgent ? 'urgent' : 'normal' }); setShowQuickReminder(false); };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -115,68 +156,18 @@ export default function AdminDashboard() {
       {/* Outer App Shell Container */}
       <View style={styles.appShell}>
         
-        {/* Left Sidebar Menu */}
-        <View style={styles.sidebar}>
-          <View style={styles.logoContainer}>
-            <View style={styles.logoIconBox}>
-              <Ionicons name="medical" size={20} color="#FFFFFF" />
-            </View>
-            <Text style={styles.logoText}>Lying-In Clinic</Text>
-          </View>
-
-          <Text style={styles.navCategory}>Main Menu</Text>
-          <TouchableOpacity style={[styles.navItem, styles.navItemActive]} activeOpacity={0.8}>
-            <Ionicons name="grid" size={18} color="#0D9488" style={styles.navIcon} />
-            <Text style={[styles.navText, styles.navTextActive]}>Dashboard</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/patients' as any)}>
-            <Ionicons name="people-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Patients</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/appointments' as any)}>
-            <Ionicons name="calendar-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Appointments</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.navCategory}>Other Menu</Text>
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/inventory' as any)}>
-            <Ionicons name="medkit-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Inventory</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/payments' as any)}>
-            <Ionicons name="wallet-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Financial Tracking</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.navCategory}>Help & Settings</Text>
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.replace('/(auth)/login' as any)}>
-            <Ionicons name="log-out-outline" size={18} color="#EF4444" style={styles.navIcon} />
-            <Text style={[styles.navText, { color: '#EF4444' }]}>Log Out</Text>
-          </TouchableOpacity>
-        </View>
-
         {/* Main Content Area */}
         <View style={styles.mainContent}>
           
           {/* Top Navigation Bar */}
           <View style={styles.topNavbar}>
-            <View style={styles.searchBox}>
-              <Ionicons name="search" size={16} color="#94A3B8" style={{ marginRight: 8 }} />
-              <TextInput 
-                placeholder="Search patient name, vitals..."
-                placeholderTextColor="#94A3B8"
-                style={styles.searchInput}
-              />
-            </View>
+            <PatientRecordSearch />
 
             <View style={styles.topNavRight}>
-              <TouchableOpacity style={styles.topIconButton}>
+              <TouchableOpacity style={styles.topIconButton} onPress={() => setShowNotifications(true)}>
                 <Ionicons name="notifications-outline" size={18} color="#64748B" />
               </TouchableOpacity>
-              <TouchableOpacity style={styles.topIconButton}>
+              <TouchableOpacity style={styles.topIconButton} onPress={openQuickReminder}>
                 <Ionicons name="chatbubble-ellipses-outline" size={18} color="#64748B" />
               </TouchableOpacity>
               <View style={styles.adminProfileBadge}>
@@ -201,7 +192,7 @@ export default function AdminDashboard() {
               <View style={styles.welcomeTextWrapper}>
                 <Text style={styles.welcomeTitle}>Good Morning, Midwife</Text>
                 <Text style={styles.welcomeSubtitle}>
-                  Have a productive shift. Database reports {metrics.aiRiskFlags} patient records flagged for urgent review.
+                  Have a productive shift. Database reports {metrics.attentionFlags} patient records needing administrative attention.
                 </Text>
                 <TouchableOpacity 
                   style={styles.bannerActionButton} 
@@ -246,14 +237,14 @@ export default function AdminDashboard() {
                 {loading ? (
                   <ActivityIndicator size="small" color="#D97706" style={{ marginVertical: 8, alignSelf: 'flex-start' }} />
                 ) : (
-                  <Text style={styles.metricValue}>{metrics.todayQueue}</Text>
+                  <Text style={styles.metricValue}>{queueError ? '—' : metrics.todayQueue}</Text>
                 )}
-                <Text style={styles.metricSub}>Scheduled checkups</Text>
+                <TouchableOpacity onPress={() => router.push('/(admin)/queue' as any)}><Text style={styles.metricSub}>{queueError ? 'Queue unavailable · Open queue' : 'Checked-in patients · Open live queue'}</Text></TouchableOpacity>
               </View>
 
               <View style={styles.metricCard}>
                 <View style={styles.metricHeaderRow}>
-                  <Text style={styles.metricLabel}>AI Risk Flags</Text>
+                  <Text style={styles.metricLabel}>Attention Follow-ups</Text>
                   <View style={styles.trendBadgeRed}>
                     <Ionicons name="warning" size={10} color="#DC2626" />
                     <Text style={styles.trendTextRed}>Urgent</Text>
@@ -262,9 +253,9 @@ export default function AdminDashboard() {
                 {loading ? (
                   <ActivityIndicator size="small" color="#DC2626" style={{ marginVertical: 8, alignSelf: 'flex-start' }} />
                 ) : (
-                  <Text style={styles.metricValue}>{metrics.aiRiskFlags}</Text>
+                  <Text style={styles.metricValue}>{metrics.attentionFlags}</Text>
                 )}
-                <Text style={styles.metricSub}>Elevated BP alerts</Text>
+                <Text style={styles.metricSub}>Administrative follow-up records</Text>
               </View>
 
               <View style={styles.metricCard}>
@@ -285,37 +276,42 @@ export default function AdminDashboard() {
 
             </View>
 
+            <View style={styles.clinicMapCard}>
+              <View style={styles.mapPreview}>
+                <View style={styles.mapRoadHorizontal} />
+                <View style={styles.mapRoadVertical} />
+                <View style={styles.mapPin}><Ionicons name="location" size={22} color={Colors.surface} /></View>
+                <Text style={styles.mapPreviewLabel}>Clinic location</Text>
+              </View>
+              <View style={styles.clinicMapContent}>
+                <View style={styles.clinicMapHeading}><View style={styles.clinicMapIcon}><Ionicons name="navigate-outline" size={18} color={Colors.primary} /></View><View><Text style={styles.cardTitle}>Clinic Location</Text><Text style={styles.cardSub}>Open directions to your clinic</Text></View></View>
+                <Text style={styles.clinicAddress}>{clinicLocation.address}</Text>
+                <TouchableOpacity style={styles.openMapButton} activeOpacity={0.85} onPress={() => Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(clinicLocation.address)}`)}>
+                  <Ionicons name="map-outline" size={16} color={Colors.surface} />
+                  <Text style={styles.openMapButtonText}>Open in Maps</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
             {/* Bottom Section Cards */}
             <View style={styles.bottomGrid}>
               
               <View style={styles.chartCard}>
-                <Text style={styles.cardTitle}>Monthly Patient Admissions</Text>
-                <Text style={styles.cardSub}>Growth overview across 2026</Text>
+                <View style={styles.chartTitleRow}><Text style={styles.cardTitle}>Patient Admissions</Text><View style={styles.admissionFilterRow}>{(['day', 'week', 'month', 'year'] as AdmissionPeriod[]).map((period) => <TouchableOpacity key={period} onPress={() => setAdmissionPeriod(period)} style={[styles.admissionFilter, admissionPeriod === period && styles.admissionFilterActive]}><Text style={[styles.admissionFilterText, admissionPeriod === period && styles.admissionFilterTextActive]}>{period}</Text></TouchableOpacity>)}</View></View>
+                <Text style={styles.cardSub}>Patient registrations by {admissionPeriod}; the tallest bar is the busiest period.</Text>
                 <View style={styles.fakeChartBox}>
-                  <View style={[styles.chartBar, { height: '40%' }]} />
-                  <View style={[styles.chartBar, { height: '65%' }]} />
-                  <View style={[styles.chartBar, { height: '50%' }]} />
-                  <View style={[styles.chartBar, { height: '80%' }]} />
-                  <View style={[styles.chartBar, { height: '60%' }]} />
-                  <View style={[styles.chartBar, { height: '90%', backgroundColor: '#0D9488' }]} />
+                  {dashboardStats.monthlyAdmissions.map((item, index, all) => <View key={item.label} style={styles.chartColumn}><View style={[styles.chartBar, { height: `${Math.max(8, (item.count / Math.max(...all.map((entry) => entry.count), 1)) * 100)}%`, backgroundColor: index === all.length - 1 ? '#0D9488' : '#CCFBF1' }]} /><Text style={styles.chartLabel}>{item.label}</Text><Text style={styles.chartCount}>{item.count}</Text></View>)}
                 </View>
               </View>
 
               <View style={styles.bmiCard}>
                 <Text style={styles.cardTitle}>Average Maternal BMI Status</Text>
-                <Text style={styles.cardSub}>Active patient population distribution</Text>
+                <Text style={styles.cardSub}>Record-management statistic; not a diagnosis</Text>
                 <View style={styles.bmiStatsRow}>
-                  <View style={styles.bmiStatItem}>
-                    <Text style={styles.bmiNum}>2</Text>
-                    <Text style={styles.bmiCategory}>Underweight</Text>
-                  </View>
                   <View style={[styles.bmiStatItem, styles.bmiStatItemActive]}>
-                    <Text style={[styles.bmiNum, { color: '#0D9488' }]}>19</Text>
-                    <Text style={[styles.bmiCategory, { color: '#0D9488', fontWeight: '700' }]}>Normal (45.5kg)</Text>
-                  </View>
-                  <View style={styles.bmiStatItem}>
-                    <Text style={styles.bmiNum}>3</Text>
-                    <Text style={styles.bmiCategory}>Overweight</Text>
+                    <Text style={[styles.bmiNum, { color: '#0D9488' }]}>{dashboardStats.averageBmi?.toFixed(1) || '—'}</Text>
+                    <Text style={[styles.bmiCategory, { color: '#0D9488', fontWeight: '700' }]}>{dashboardStats.bmiLabel}</Text>
+                    <Text style={styles.bmiCategory}>{dashboardStats.bmiCount} patient{dashboardStats.bmiCount === 1 ? '' : 's'} included</Text>
                   </View>
                 </View>
                 <View style={styles.progressBarBg}>
@@ -330,6 +326,9 @@ export default function AdminDashboard() {
         </View>
 
       </View>
+
+      <Modal visible={showNotifications} transparent animationType="fade"><View style={styles.modalOverlay}><View style={styles.notificationModal}><Text style={styles.cardTitle}>Sent Reminders</Text>{reminders.length ? reminders.map((item) => <View key={item.id} style={styles.reminderRow}><Text style={styles.reminderTitle}>{item.title}</Text><Text style={styles.reminderStatus}>{item.completed ? 'Completed' : 'Pending'} · {item.patientUid}</Text></View>) : <Text style={styles.cardSub}>No reminders sent yet.</Text>}<TouchableOpacity style={styles.closeModal} onPress={() => setShowNotifications(false)}><Text style={styles.closeModalText}>Close</Text></TouchableOpacity></View></View></Modal>
+      <Modal visible={showQuickReminder} transparent animationType="fade"><View style={styles.modalOverlay}><View style={styles.notificationModal}><Text style={styles.cardTitle}>Quick Send Reminder</Text><TextInput value={quickSearch} onChangeText={setQuickSearch} placeholder="Search patient name" style={styles.quickInput} />{quickSearch ? quickPatients.filter((patient) => String(patient.name || patient.fullName || '').toLowerCase().includes(quickSearch.toLowerCase())).slice(0, 4).map((patient) => <TouchableOpacity key={patient.id} style={styles.reminderRow} onPress={() => { setQuickPatient(patient); setQuickSearch(patient.name || patient.fullName); }}><Text style={styles.reminderTitle}>{patient.name || patient.fullName}</Text><Text style={styles.reminderStatus}>{patient.contactNumber || 'No phone number'}</Text></TouchableOpacity>) : null}<TextInput value={quickTitle} onChangeText={setQuickTitle} placeholder="Reminder message" style={styles.quickInput} /><TouchableOpacity style={[styles.urgentButton, quickUrgent && styles.urgentButtonActive]} onPress={() => setQuickUrgent(!quickUrgent)}><Text style={styles.urgentText}>{quickUrgent ? 'Urgent reminder' : 'Normal reminder'}</Text></TouchableOpacity><TouchableOpacity style={styles.closeModal} onPress={sendQuickReminder}><Text style={styles.closeModalText}>Send Reminder</Text></TouchableOpacity></View></View></Modal>
     </SafeAreaView>
   );
 }
@@ -343,73 +342,13 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
   },
-  sidebar: {
-    width: 240,
-    backgroundColor: '#FFFFFF',
-    borderRightWidth: 1,
-    borderRightColor: '#E2E8F0',
-    paddingVertical: 24,
-    paddingHorizontal: 16,
-  },
-  logoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 32,
-    paddingHorizontal: 8,
-  },
-  logoIconBox: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: '#0D9488',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 10,
-  },
-  logoText: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  navCategory: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#94A3B8',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginTop: 20,
-    marginBottom: 10,
-    paddingHorizontal: 8,
-  },
-  navItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    marginBottom: 4,
-  },
-  navItemActive: {
-    backgroundColor: '#CCFBF1',
-  },
-  navIcon: {
-    marginRight: 12,
-  },
-  navText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  navTextActive: {
-    color: '#0D9488',
-    fontWeight: '700',
-  },
   mainContent: {
     flex: 1,
     backgroundColor: '#F8FAFC',
     flexDirection: 'column',
   },
   topNavbar: {
+    position: 'relative', zIndex: 100, elevation: 100,
     height: 70,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
@@ -540,6 +479,34 @@ const styles = StyleSheet.create({
     gap: 16,
     marginBottom: 24,
   },
+  clinicMapCard: {
+    flexDirection: 'row',
+    minHeight: 172,
+    backgroundColor: Colors.surface,
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 24,
+  },
+  mapPreview: {
+    width: '38%',
+    backgroundColor: Colors.infoPale,
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  mapRoadHorizontal: { position: 'absolute', width: '125%', height: 24, backgroundColor: Colors.surface, transform: [{ rotate: '-16deg' }] },
+  mapRoadVertical: { position: 'absolute', width: 20, height: '130%', backgroundColor: Colors.surface, transform: [{ rotate: '31deg' }] },
+  mapPin: { width: 42, height: 42, borderRadius: 21, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center', borderWidth: 4, borderColor: Colors.primarySoft, zIndex: 1 },
+  mapPreviewLabel: { position: 'absolute', bottom: 13, backgroundColor: Colors.surface, color: Colors.textSecondary, fontSize: 10, fontWeight: '800', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+  clinicMapContent: { flex: 1, padding: 20, justifyContent: 'space-between' },
+  clinicMapHeading: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  clinicMapIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: Colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
+  clinicAddress: { fontSize: 12, color: Colors.textMuted, lineHeight: 18, marginTop: 9, marginBottom: 12 },
+  openMapButton: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: Colors.primary, borderRadius: 9, paddingHorizontal: 13, paddingVertical: 9 },
+  openMapButtonText: { color: Colors.surface, fontSize: 12, fontWeight: '800' },
   metricCard: {
     flex: 1,
     backgroundColor: '#FFFFFF',
@@ -670,11 +637,29 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E2E8F0',
   },
   chartBar: {
-    width: 24,
+    width: 20,
     backgroundColor: '#CCFBF1',
     borderTopLeftRadius: 6,
     borderTopRightRadius: 6,
   },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', alignItems: 'center', justifyContent: 'center', padding: 20 },
+  notificationModal: { width: '100%', maxWidth: 430, maxHeight: '75%', backgroundColor: '#FFFFFF', borderRadius: 16, padding: 20 },
+  reminderRow: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  reminderTitle: { fontSize: 13, fontWeight: '700', color: '#0F172A' },
+  reminderStatus: { fontSize: 11, color: '#64748B', marginTop: 2 },
+  closeModal: { backgroundColor: '#0D9488', borderRadius: 9, paddingVertical: 10, alignItems: 'center', marginTop: 14 },
+  closeModalText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  quickInput: { borderWidth: 1, borderColor: '#CFE8E5', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, marginTop: 10, color: '#0F172A' },
+  urgentButton: { borderWidth: 1, borderColor: '#FDE68A', backgroundColor: '#FFFBEB', borderRadius: 9, paddingVertical: 9, alignItems: 'center', marginTop: 10 }, urgentButtonActive: { backgroundColor: '#FEE2E2', borderColor: '#EF4444' }, urgentText: { color: '#92400E', fontSize: 12, fontWeight: '700' },
+  chartTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  admissionFilterRow: { flexDirection: 'row', gap: 4 },
+  admissionFilter: { paddingHorizontal: 6, paddingVertical: 4, borderRadius: 6, backgroundColor: '#F1F5F9' },
+  admissionFilterActive: { backgroundColor: '#0D9488' },
+  admissionFilterText: { fontSize: 9, color: '#64748B', fontWeight: '700', textTransform: 'capitalize' },
+  admissionFilterTextActive: { color: '#FFFFFF' },
+  chartColumn: { flex: 1, height: '100%', alignItems: 'center', justifyContent: 'flex-end' },
+  chartLabel: { fontSize: 9, color: '#64748B', marginTop: 4 },
+  chartCount: { fontSize: 9, color: '#0F172A', fontWeight: '700' },
   bmiStatsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',

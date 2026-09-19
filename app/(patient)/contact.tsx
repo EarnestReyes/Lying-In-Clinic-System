@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { CLINIC } from '../../src/config/clinic';
 
 export default function ContactScreen() {
   const router = useRouter();
@@ -20,8 +21,7 @@ export default function ContactScreen() {
   };
 
   const handleOpenMap = () => {
-    // Opens map directions placeholder or coordinate search
-    Linking.openURL('https://maps.google.com/?q=Lying-In+Clinic');
+    router.push('/(patient)/clinic-map' as any);
   };
 
   return (
@@ -80,7 +80,7 @@ export default function ContactScreen() {
           </View>
           <View style={styles.infoContent}>
             <Text style={styles.infoLabel}>Clinic Address</Text>
-            <Text style={styles.infoValue}>Main St., Barangay Health Center, Imus, Cavite</Text>
+            <Text style={styles.infoValue}>{CLINIC.address}</Text>
           </View>
           <Ionicons name="open-outline" size={18} color="#94A3B8" />
         </TouchableOpacity>

@@ -16,8 +16,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 
 // Firebase Imports
-import { doc, getDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../../../src/config/firebase';
+import { administerMedication } from '../../../src/services/medicationService';
+import { sendReminderToPatient } from '../../../src/(patient)/remindersService';
+import { auth } from '../../../src/config/firebase';
+import { addMedicalHistoryEntry, addPrenatalVisit, getAvailableMedicationInventory, updatePatientRecord } from '../../../src/services/patientRecordService';
+import { fetchPatientById } from '../../../src/services/patientService';
 
 export default function PatientDetailScreen() {
   const router = useRouter();
@@ -27,12 +30,42 @@ export default function PatientDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [patient, setPatient] = useState<any>(null);
 
+  // --- PROFILE EDIT MODAL STATES ---
+  const [isEditProfileVisible, setIsEditProfileVisible] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editAge, setEditAge] = useState('');
+  const [editContactNumber, setEditContactNumber] = useState('');
+  const [editBloodType, setEditBloodType] = useState('');
+  const [editGravidaPara, setEditGravidaPara] = useState('');
+  const [editPregnancyWeek, setEditPregnancyWeek] = useState('');
+  const [editEdd, setEditEdd] = useState('');
+  const [editAddress, setEditAddress] = useState('');
+
+  // --- MEDICATION ADMINISTRATION MODAL STATES ---
+  const [isMedicationModalVisible, setIsMedicationModalVisible] = useState(false);
+  const [submittingMedication, setSubmittingMedication] = useState(false);
+  const [inventoryMedications, setInventoryMedications] = useState<any[]>([]);
+  const [selectedMedicationId, setSelectedMedicationId] = useState('');
+  const [medicationQuantity, setMedicationQuantity] = useState('');
+  const [medicationDosage, setMedicationDosage] = useState('');
+  const [medicationNotes, setMedicationNotes] = useState('');
+
+  // --- STAFF REMINDER MODAL STATES ---
+  const [isReminderModalVisible, setIsReminderModalVisible] = useState(false);
+  const [sendingReminder, setSendingReminder] = useState(false);
+  const [reminderTitle, setReminderTitle] = useState('');
+  const [reminderDate, setReminderDate] = useState('');
+  const [reminderTime, setReminderTime] = useState('');
+  const [reminderType, setReminderType] = useState<'Medication' | 'Checkup' | 'Lab Test' | 'General'>('General');
+
   // --- CHECKUP MODAL STATES ---
   const [isCheckupModalVisible, setIsCheckupModalVisible] = useState(false);
   const [submittingCheckup, setSubmittingCheckup] = useState(false);
   const [visitNo, setVisitNo] = useState('');
   const [bp, setBp] = useState('');
   const [weight, setWeight] = useState('');
+  const [heightCm, setHeightCm] = useState('');
   const [fhb, setFhb] = useState('');
   const [gestationalAgeInput, setGestationalAgeInput] = useState('');
   const [staffNotes, setStaffNotes] = useState('');
@@ -43,12 +76,135 @@ export default function PatientDetailScreen() {
   const [historyTitle, setHistoryTitle] = useState('');
   const [historyNotes, setHistoryNotes] = useState('');
 
+  const openEditProfile = () => {
+    setEditName(patient?.fullName || '');
+    setEditAge(patient?.age != null && patient.age !== 'N/A' ? String(patient.age) : '');
+    setEditContactNumber(patient?.contactNumber === 'N/A' ? '' : patient?.contactNumber || '');
+    setEditBloodType(patient?.bloodType === 'N/A' ? '' : patient?.bloodType || '');
+    setEditGravidaPara(`G${patient?.gravida ?? 1} P${patient?.para ?? 0}`);
+    setEditPregnancyWeek((patient?.gestationalAge || '').replace(/\s*weeks?\s*/i, ''));
+    setEditEdd(patient?.expectedDueDate === 'N/A' ? '' : patient?.expectedDueDate || '');
+    setEditAddress(patient?.address === 'N/A' ? '' : patient?.address || '');
+    setIsEditProfileVisible(true);
+  };
+
+  const handleSaveProfile = async () => {
+    const targetId = Array.isArray(id) ? id[0] : id;
+    if (!targetId || !editName.trim()) {
+      Alert.alert('Validation Error', 'Patient name is required.');
+      return;
+    }
+    if (editAge && (!/^\d+$/.test(editAge) || Number(editAge) <= 0)) {
+      Alert.alert('Validation Error', 'Age must be a positive whole number.');
+      return;
+    }
+    if (editPregnancyWeek && (!/^\d+(\.\d+)?$/.test(editPregnancyWeek) || Number(editPregnancyWeek) < 0 || Number(editPregnancyWeek) > 45)) {
+      Alert.alert('Validation Error', 'Pregnancy week must be between 0 and 45.');
+      return;
+    }
+    try {
+      setSavingProfile(true);
+      const updates = {
+        name: editName.trim(),
+        age: editAge ? Number(editAge) : null,
+        contactNumber: editContactNumber.trim(),
+        bloodType: editBloodType.trim(),
+        gravidaPara: editGravidaPara.trim(),
+        pregnancyWeek: editPregnancyWeek ? Number(editPregnancyWeek) : null,
+        edd: editEdd.trim(),
+        address: editAddress.trim(),
+      };
+      await updatePatientRecord(targetId, updates);
+      const matches = editGravidaPara.match(/G(\d+)\s*P(\d+)/i);
+      setPatient((current: any) => ({
+        ...current,
+        fullName: updates.name,
+        age: updates.age ?? 'N/A',
+        contactNumber: updates.contactNumber || 'N/A',
+        bloodType: updates.bloodType || 'N/A',
+        gravida: matches ? Number(matches[1]) : current.gravida,
+        para: matches ? Number(matches[2]) : current.para,
+        gestationalAge: updates.pregnancyWeek != null ? `${updates.pregnancyWeek} weeks` : 'N/A',
+        expectedDueDate: updates.edd || 'N/A',
+        address: updates.address || 'N/A',
+      }));
+      setIsEditProfileVisible(false);
+      Alert.alert('Profile updated', 'Patient profile changes were saved.');
+    } catch (error) {
+      console.error('Error updating patient profile:', error);
+      Alert.alert('Unable to save', 'Patient profile changes were not saved. Please try again.');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const openMedicationModal = async () => {
+    try {
+      setInventoryMedications(await getAvailableMedicationInventory());
+      setSelectedMedicationId('');
+      setMedicationQuantity('');
+      setMedicationDosage('');
+      setMedicationNotes('');
+      setIsMedicationModalVisible(true);
+    } catch (error) {
+      console.error('Unable to load medication inventory:', error);
+      Alert.alert('Unable to load inventory', 'Medication inventory could not be loaded. Please try again.');
+    }
+  };
+
+  const handleAdministerMedication = async () => {
+    const targetId = Array.isArray(id) ? id[0] : id;
+    const quantity = Number(medicationQuantity);
+    if (!targetId || !selectedMedicationId || !Number.isFinite(quantity) || quantity <= 0) {
+      Alert.alert('Validation Error', 'Select a medication and enter a quantity greater than zero.');
+      return;
+    }
+    try {
+      setSubmittingMedication(true);
+      await administerMedication({ patientId: targetId, patientName: patient?.fullName || 'Unknown patient', inventoryItemId: selectedMedicationId, quantity, dosage: medicationDosage, notes: medicationNotes });
+      setIsMedicationModalVisible(false);
+      Alert.alert('Medication recorded', 'Administration was recorded and inventory stock was updated.');
+    } catch (error: any) {
+      Alert.alert('Unable to administer', error?.message || 'The medication record was not saved.');
+    } finally {
+      setSubmittingMedication(false);
+    }
+  };
+
+  const openReminderModal = () => {
+    setReminderTitle('');
+    setReminderDate('');
+    setReminderTime('');
+    setReminderType('General');
+    setIsReminderModalVisible(true);
+  };
+
+  const handleSendReminder = async () => {
+    const targetId = Array.isArray(id) ? id[0] : id;
+    if (!targetId || !reminderTitle.trim() || !reminderDate.trim() || !reminderTime.trim()) {
+      Alert.alert('Validation Error', 'Enter a reminder title, date, and time.');
+      return;
+    }
+    try {
+      setSendingReminder(true);
+      await sendReminderToPatient({ patientUid: targetId, patientId: targetId, title: reminderTitle.trim(), date: reminderDate.trim(), time: reminderTime.trim(), type: reminderType }, auth.currentUser?.uid);
+      setIsReminderModalVisible(false);
+      Alert.alert('Reminder sent', `The reminder is now available in ${patient?.fullName || 'the patient'}'s portal.`);
+    } catch (error) {
+      console.error('Unable to send reminder:', error);
+      Alert.alert('Unable to send reminder', 'The reminder was not saved. Please try again.');
+    } finally {
+      setSendingReminder(false);
+    }
+  };
+
   // Open Checkup Modal
   const handleOpenCheckupModal = () => {
     const nextVisitNum = (patient?.prenatalVisits?.length || 0) + 1;
     setVisitNo(`Visit #${nextVisitNum}`);
     setBp('');
     setWeight('');
+    setHeightCm(patient?.heightCm ? String(patient.heightCm) : '');
     setFhb('');
     setGestationalAgeInput(patient?.gestationalAge || '');
     setStaffNotes('');
@@ -65,6 +221,13 @@ export default function PatientDetailScreen() {
     try {
       setSubmittingCheckup(true);
       const targetId = Array.isArray(id) ? id[0] : id;
+      const numericWeight = Number(String(weight).replace(/[^0-9.]/g, ''));
+      const numericHeight = Number(heightCm);
+      if (heightCm && (!Number.isFinite(numericHeight) || numericHeight <= 0)) {
+        Alert.alert('Validation Error', 'Height must be a positive number in centimeters.');
+        return;
+      }
+      const bmi = numericHeight > 0 && numericWeight > 0 ? numericWeight / Math.pow(numericHeight / 100, 2) : null;
       const currentDate = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
       const newVisitData = {
@@ -72,18 +235,22 @@ export default function PatientDetailScreen() {
         date: currentDate,
         bp,
         weight,
+        heightCm: numericHeight || null,
+        bmi: bmi ? Number(bmi.toFixed(1)) : null,
         fhb: fhb || 'N/A',
         gestationalAge: gestationalAgeInput,
         notes: staffNotes || 'Routine checkup completed.',
-        createdAt: serverTimestamp(),
       };
 
-      const visitsCollectionRef = collection(db, 'patients', targetId, 'prenatalVisits');
-      await addDoc(visitsCollectionRef, newVisitData);
+      await addPrenatalVisit(targetId, newVisitData, {
+        weight,
+        ...(numericHeight > 0 ? { heightCm: numericHeight } : {}),
+      });
 
       setPatient((prev: any) => ({
         ...prev,
         gestationalAge: gestationalAgeInput || prev.gestationalAge,
+        heightCm: numericHeight || prev.heightCm,
         prenatalVisits: [newVisitData, ...(prev.prenatalVisits || [])]
       }));
 
@@ -113,11 +280,9 @@ export default function PatientDetailScreen() {
         title: historyTitle,
         date: currentDate,
         notes: historyNotes,
-        createdAt: serverTimestamp(),
       };
 
-      const historyColRef = collection(db, 'patients', targetId, 'medicalHistory');
-      await addDoc(historyColRef, newHistoryData);
+      await addMedicalHistoryEntry(targetId, newHistoryData);
 
       setPatient((prev: any) => ({
         ...prev,
@@ -141,11 +306,10 @@ export default function PatientDetailScreen() {
         setLoading(true);
         const targetId = Array.isArray(id) ? id[0] : id;
 
-        const docRef = doc(db, 'patients', targetId);
-        const docSnap = await getDoc(docRef);
+        const record = await fetchPatientById(targetId);
 
-        if (docSnap.exists()) {
-          const data = docSnap.data();
+        if (record) {
+          const data = record;
           
           let gravidaVal = 1;
           let paraVal = 0;
@@ -226,49 +390,6 @@ export default function PatientDetailScreen() {
       <StatusBar barStyle="dark-content" backgroundColor="#F8FAFC" />
 
       <View style={styles.appShell}>
-        {/* Left Sidebar Menu */}
-        <View style={styles.sidebar}>
-          <View style={styles.logoContainer}>
-            <View style={styles.logoIconBox}>
-              <Ionicons name="medical" size={20} color="#FFFFFF" />
-            </View>
-            <Text style={styles.logoText}>Lying-In Clinic</Text>
-          </View>
-
-          <Text style={styles.navCategory}>Main Menu</Text>
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/dashboard' as any)}>
-            <Ionicons name="grid-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Dashboard</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.navItem, styles.navItemActive]} activeOpacity={0.8} onPress={() => router.push('/(admin)/patients' as any)}>
-            <Ionicons name="people" size={18} color="#0D9488" style={styles.navIcon} />
-            <Text style={[styles.navText, styles.navTextActive]}>Patients</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/appointments' as any)}>
-            <Ionicons name="calendar-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Appointments</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.navCategory}>Other Menu</Text>
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/inventory' as any)}>
-            <Ionicons name="medkit-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Inventory</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/payments' as any)}>
-            <Ionicons name="wallet-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Financial Tracking</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.navCategory}>Help & Settings</Text>
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.replace('/(auth)/login' as any)}>
-            <Ionicons name="log-out-outline" size={18} color="#EF4444" style={styles.navIcon} />
-            <Text style={[styles.navText, { color: '#EF4444' }]}>Log Out</Text>
-          </TouchableOpacity>
-        </View>
-
         {/* Main Content Area */}
         <View style={styles.mainContent}>
           <View style={styles.topNavbar}>
@@ -326,10 +447,16 @@ export default function PatientDetailScreen() {
                   <Text style={styles.profileSubId}>ID: {patient?.id} • DOB: {patient?.dob} ({patient?.age} yrs old)</Text>
                 </View>
 
-                <TouchableOpacity style={styles.primaryButton} activeOpacity={0.8}>
-                  <Ionicons name="create-outline" size={15} color="#FFFFFF" style={{ marginRight: 6 }} />
-                  <Text style={styles.primaryButtonText}>Edit Profile</Text>
-                </TouchableOpacity>
+                <View style={styles.profileActions}>
+                  <TouchableOpacity style={styles.reminderButton} activeOpacity={0.8} onPress={openReminderModal}>
+                    <Ionicons name="notifications-outline" size={15} color="#0D9488" style={{ marginRight: 5 }} />
+                    <Text style={styles.reminderButtonText}>Send Reminder</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.primaryButton} activeOpacity={0.8} onPress={openEditProfile}>
+                    <Ionicons name="create-outline" size={15} color="#FFFFFF" style={{ marginRight: 6 }} />
+                    <Text style={styles.primaryButtonText}>Edit Profile</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
 
               <View style={styles.cardDivider} />
@@ -407,6 +534,10 @@ export default function PatientDetailScreen() {
                   <TouchableOpacity style={styles.secondaryButton} onPress={handleOpenCheckupModal} activeOpacity={0.8}>
                     <Ionicons name="add" size={14} color="#0D9488" style={{ marginRight: 4 }} />
                     <Text style={styles.secondaryButtonText}>New Checkup Visit</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.secondaryButton} onPress={openMedicationModal} activeOpacity={0.8}>
+                    <Ionicons name="medkit-outline" size={14} color="#0D9488" style={{ marginRight: 4 }} />
+                    <Text style={styles.secondaryButtonText}>Administer Medication</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -497,6 +628,88 @@ export default function PatientDetailScreen() {
           </ScrollView>
         </View>
       </View>
+
+      {/* ================= EDIT PROFILE MODAL ================= */}
+      <Modal visible={isEditProfileVisible} transparent animationType="fade" onRequestClose={() => setIsEditProfileVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalTitle}>Edit Patient Profile</Text>
+                <Text style={styles.modalSubtitle}>Update administrative patient information.</Text>
+              </View>
+              <TouchableOpacity onPress={() => setIsEditProfileVisible(false)} style={styles.modalCloseBtn} disabled={savingProfile}>
+                <Ionicons name="close" size={18} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView contentContainerStyle={styles.modalFormBody} showsVerticalScrollIndicator={false}>
+              <View style={styles.inputGroup}><Text style={styles.inputLabel}>Full Name *</Text><TextInput style={styles.textInput} value={editName} onChangeText={setEditName} placeholder="Patient name" /></View>
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <View style={[styles.inputGroup, { flex: 1 }]}><Text style={styles.inputLabel}>Age</Text><TextInput style={styles.textInput} value={editAge} onChangeText={setEditAge} keyboardType="number-pad" placeholder="Age" /></View>
+                <View style={[styles.inputGroup, { flex: 1 }]}><Text style={styles.inputLabel}>Blood Type</Text><TextInput style={styles.textInput} value={editBloodType} onChangeText={setEditBloodType} placeholder="e.g. O+" autoCapitalize="characters" /></View>
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Height (cm, optional for BMI record)</Text>
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="e.g. 160"
+                  value={heightCm}
+                  onChangeText={setHeightCm}
+                  keyboardType="decimal-pad"
+                  placeholderTextColor="#94A3B8"
+                />
+                <Text style={styles.inputHint}>When height and weight are recorded, BMI is stored as a record-management statistic only.</Text>
+              </View>
+              <View style={styles.inputGroup}><Text style={styles.inputLabel}>Contact Number</Text><TextInput style={styles.textInput} value={editContactNumber} onChangeText={setEditContactNumber} keyboardType="phone-pad" placeholder="Contact number" /></View>
+              <View style={styles.inputGroup}><Text style={styles.inputLabel}>Address</Text><TextInput style={styles.textInput} value={editAddress} onChangeText={setEditAddress} placeholder="Address" /></View>
+              <View style={{ flexDirection: 'row', gap: 12 }}>
+                <View style={[styles.inputGroup, { flex: 1 }]}><Text style={styles.inputLabel}>Gravida / Para</Text><TextInput style={styles.textInput} value={editGravidaPara} onChangeText={setEditGravidaPara} placeholder="G1 P0" /></View>
+                <View style={[styles.inputGroup, { flex: 1 }]}><Text style={styles.inputLabel}>Pregnancy Week</Text><TextInput style={styles.textInput} value={editPregnancyWeek} onChangeText={setEditPregnancyWeek} keyboardType="decimal-pad" placeholder="e.g. 28" /></View>
+              </View>
+              <View style={styles.inputGroup}><Text style={styles.inputLabel}>Estimated Due Date</Text><TextInput style={styles.textInput} value={editEdd} onChangeText={setEditEdd} placeholder="e.g. October 25, 2026" /></View>
+            </ScrollView>
+            <View style={styles.modalFooter}>
+              <TouchableOpacity style={styles.modalCancelButton} onPress={() => setIsEditProfileVisible(false)} disabled={savingProfile}><Text style={styles.modalCancelText}>Cancel</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.modalSubmitButton} onPress={handleSaveProfile} disabled={savingProfile}>
+                {savingProfile ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.modalSubmitText}>Save Changes</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ================= STAFF REMINDER MODAL ================= */}
+      <Modal visible={isReminderModalVisible} transparent animationType="fade" onRequestClose={() => setIsReminderModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}><View><Text style={styles.modalTitle}>Send Patient Reminder</Text><Text style={styles.modalSubtitle}>This will appear in {patient?.fullName || 'the patient'}'s portal.</Text></View><TouchableOpacity onPress={() => setIsReminderModalVisible(false)} style={styles.modalCloseBtn} disabled={sendingReminder}><Ionicons name="close" size={18} color="#64748B" /></TouchableOpacity></View>
+            <ScrollView contentContainerStyle={styles.modalFormBody}>
+              <View style={styles.inputGroup}><Text style={styles.inputLabel}>Reminder Title *</Text><TextInput style={styles.textInput} value={reminderTitle} onChangeText={setReminderTitle} placeholder="e.g. Prenatal checkup tomorrow" /></View>
+              <View style={{ flexDirection: 'row', gap: 12 }}><View style={[styles.inputGroup, { flex: 1 }]}><Text style={styles.inputLabel}>Date *</Text><TextInput style={styles.textInput} value={reminderDate} onChangeText={setReminderDate} placeholder="Oct 15, 2026" /></View><View style={[styles.inputGroup, { flex: 1 }]}><Text style={styles.inputLabel}>Time *</Text><TextInput style={styles.textInput} value={reminderTime} onChangeText={setReminderTime} placeholder="9:00 AM" /></View></View>
+              <Text style={styles.inputLabel}>Type</Text><View style={styles.reminderTypeRow}>{(['General', 'Medication', 'Checkup', 'Lab Test'] as const).map((type) => <TouchableOpacity key={type} onPress={() => setReminderType(type)} style={[styles.reminderTypeOption, reminderType === type && styles.reminderTypeOptionSelected]}><Text style={[styles.reminderTypeText, reminderType === type && styles.reminderTypeTextSelected]}>{type}</Text></TouchableOpacity>)}</View>
+            </ScrollView>
+            <View style={styles.modalFooter}><TouchableOpacity style={styles.modalCancelButton} onPress={() => setIsReminderModalVisible(false)} disabled={sendingReminder}><Text style={styles.modalCancelText}>Cancel</Text></TouchableOpacity><TouchableOpacity style={styles.modalSubmitButton} onPress={handleSendReminder} disabled={sendingReminder}>{sendingReminder ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.modalSubmitText}>Send Reminder</Text>}</TouchableOpacity></View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ================= MEDICATION ADMINISTRATION MODAL ================= */}
+      <Modal visible={isMedicationModalVisible} transparent animationType="fade" onRequestClose={() => setIsMedicationModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}><View><Text style={styles.modalTitle}>Administer Medication</Text><Text style={styles.modalSubtitle}>Inventory will be deducted when saved.</Text></View><TouchableOpacity onPress={() => setIsMedicationModalVisible(false)} disabled={submittingMedication} style={styles.modalCloseBtn}><Ionicons name="close" size={18} color="#64748B" /></TouchableOpacity></View>
+            <ScrollView contentContainerStyle={styles.modalFormBody}>
+              <Text style={styles.inputLabel}>Available Medication *</Text>
+              {inventoryMedications.length ? inventoryMedications.map((item) => <TouchableOpacity key={item.id} onPress={() => setSelectedMedicationId(item.id)} style={[styles.medicationOption, selectedMedicationId === item.id && styles.medicationOptionSelected]}><Text style={styles.medicationOptionName}>{item.itemName}</Text><Text style={styles.medicationOptionStock}>{item.stock} {item.unit} available</Text></TouchableOpacity>) : <Text style={styles.modalSubtitle}>No active inventory item has available stock.</Text>}
+              <View style={styles.inputGroup}><Text style={styles.inputLabel}>Quantity *</Text><TextInput style={styles.textInput} value={medicationQuantity} onChangeText={setMedicationQuantity} keyboardType="numeric" placeholder="Quantity given" /></View>
+              <View style={styles.inputGroup}><Text style={styles.inputLabel}>Dosage (optional)</Text><TextInput style={styles.textInput} value={medicationDosage} onChangeText={setMedicationDosage} placeholder="e.g. 500 mg" /></View>
+              <View style={styles.inputGroup}><Text style={styles.inputLabel}>Administration Notes (optional)</Text><TextInput style={styles.textInput} value={medicationNotes} onChangeText={setMedicationNotes} placeholder="Notes" /></View>
+            </ScrollView>
+            <View style={styles.modalFooter}><TouchableOpacity style={styles.modalCancelButton} onPress={() => setIsMedicationModalVisible(false)} disabled={submittingMedication}><Text style={styles.modalCancelText}>Cancel</Text></TouchableOpacity><TouchableOpacity style={styles.modalSubmitButton} onPress={handleAdministerMedication} disabled={submittingMedication}>{submittingMedication ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.modalSubmitText}>Record Administration</Text>}</TouchableOpacity></View>
+          </View>
+        </View>
+      </Modal>
 
       {/* ================= NEW CHECKUP VISIT MODAL ================= */}
       <Modal
@@ -707,16 +920,6 @@ export default function PatientDetailScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F1F5F9' },
   appShell: { flex: 1, flexDirection: 'row' },
-  sidebar: { width: 240, backgroundColor: '#FFFFFF', borderRightWidth: 1, borderRightColor: '#E2E8F0', paddingVertical: 24, paddingHorizontal: 16 },
-  logoContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 32, paddingHorizontal: 8 },
-  logoIconBox: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#0D9488', justifyContent: 'center', alignItems: 'center', marginRight: 10 },
-  logoText: { fontSize: 18, fontWeight: '800', color: '#0F172A' },
-  navCategory: { fontSize: 11, fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase', letterSpacing: 0.8, marginTop: 20, marginBottom: 10, paddingHorizontal: 8 },
-  navItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10, marginBottom: 4 },
-  navItemActive: { backgroundColor: '#CCFBF1' },
-  navIcon: { marginRight: 12 },
-  navText: { fontSize: 14, fontWeight: '600', color: '#64748B' },
-  navTextActive: { color: '#0D9488', fontWeight: '700' },
   mainContent: { flex: 1, backgroundColor: '#F8FAFC', flexDirection: 'column' },
   topNavbar: { height: 70, backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#E2E8F0', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 30 },
   backButtonRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
@@ -745,6 +948,9 @@ const styles = StyleSheet.create({
   metaValue: { fontSize: 13, fontWeight: '700', color: '#0F172A' },
   primaryButton: { backgroundColor: '#0D9488', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 9, borderRadius: 8 },
   primaryButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  profileActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  reminderButton: { backgroundColor: '#CCFBF1', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 9, borderRadius: 8 },
+  reminderButtonText: { color: '#0D9488', fontSize: 12, fontWeight: '700' },
   tabRow: { flexDirection: 'row', gap: 8, marginBottom: 20 },
   tabButton: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0' },
   tabButtonActive: { backgroundColor: '#0D9488', borderColor: '#0D9488' },
@@ -755,6 +961,15 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 16, fontWeight: '800', color: '#0F172A' },
   secondaryButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#CCFBF1', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
   secondaryButtonText: { fontSize: 12, fontWeight: '700', color: '#0D9488' },
+  medicationOption: { padding: 11, borderRadius: 9, borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#F8FAFC' },
+  medicationOptionSelected: { borderColor: '#0D9488', backgroundColor: '#CCFBF1' },
+  medicationOptionName: { fontSize: 13, fontWeight: '700', color: '#0F172A' },
+  medicationOptionStock: { fontSize: 11, color: '#64748B', marginTop: 2 },
+  reminderTypeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  reminderTypeOption: { borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#F8FAFC', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
+  reminderTypeOptionSelected: { backgroundColor: '#0D9488', borderColor: '#0D9488' },
+  reminderTypeText: { fontSize: 12, color: '#64748B', fontWeight: '600' },
+  reminderTypeTextSelected: { color: '#FFFFFF' },
   historyCard: { backgroundColor: '#FFFFFF', borderRadius: 12, padding: 16, borderWidth: 1, borderColor: '#E2E8F0' },
   historyTitle: { fontSize: 14, fontWeight: '700', color: '#0F172A' },
   historyDate: { fontSize: 12, color: '#64748B' },
@@ -853,6 +1068,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#334155',
   },
+  inputHint: { fontSize: 11, color: '#64748B', lineHeight: 15 },
   textInput: {
     backgroundColor: '#F8FAFC',
     borderWidth: 1,

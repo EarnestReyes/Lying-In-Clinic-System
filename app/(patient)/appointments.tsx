@@ -14,8 +14,9 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { db } from '../../src/config/firebase'; // Adjust path if needed
-import { collection, query, where, getDocs, addDoc, Timestamp } from 'firebase/firestore';
+import { auth } from '../../src/config/firebase';
+import { createAppointment, subscribePatientAppointments } from '../../src/services/appointmentService';
+import { QueueButton } from '../../components/QueueUI';
 
 export default function PatientAppointmentsScreen() {
   const router = useRouter();
@@ -30,65 +31,32 @@ export default function PatientAppointmentsScreen() {
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // Hardcoded patient UID matching your database
-  const patientUid = "spCRyTr79TaIAPDQMQLN6t1keqg2";
-
-  // Fetch appointments from Firestore
-  const fetchAppointments = async () => {
-    try {
-      setLoading(true);
-      const q = query(collection(db, "appointments"), where("patientUid", "==", patientUid));
-      const querySnapshot = await getDocs(q);
-      
-      const list: any[] = [];
-      querySnapshot.forEach((doc) => {
-        list.push({ id: doc.id, ...doc.data() });
-      });
-
-      // Sort by date or fallback to mock if none exist in DB yet
-      if (list.length > 0) {
-        setAppointments(list);
-      } else {
-        // Fallback sample data matching your profile's checkup date
-        setAppointments([
-          {
-            id: '1',
-            date: 'September 21, 2026',
-            time: '9:00 AM',
-            status: 'Confirmed',
-            type: 'Prenatal Checkup & CBC Review',
-            doctor: 'Dr. Sarah Jenkins',
-          }
-        ]);
-      }
-    } catch (error) {
-      console.error("Error fetching appointments:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const patientUid = auth.currentUser?.uid;
 
   useEffect(() => {
-    fetchAppointments();
-  }, []);
+    if (!patientUid) { setLoading(false); return; }
+    setLoading(true);
+    return subscribePatientAppointments(patientUid, (records) => { setAppointments(records); setLoading(false); }, (error) => { console.error('Error fetching appointments:', error); setLoading(false); });
+  }, [patientUid]);
 
   // Handle booking a new appointment request
   const handleBookAppointment = async () => {
-    if (!preferredDate || !preferredTime) {
+    if (!patientUid || !preferredDate || !preferredTime) {
       Alert.alert("Missing Fields", "Please provide both a preferred date and time.");
       return;
     }
 
     try {
       setSubmitting(true);
-      await addDoc(collection(db, "appointments"), {
+      await createAppointment({
         patientUid,
-        date: preferredDate,
-        time: preferredTime,
+        patientId: patientUid,
+        patientName: 'Patient',
+        appointmentDate: preferredDate,
+        appointmentTime: preferredTime,
         notes: notes,
-        status: 'Pending',
-        type: 'General Prenatal Consultation',
-        createdAt: Timestamp.now(),
+        status: 'pending',
+        purpose: 'General Prenatal Consultation',
       });
 
       Alert.alert("Success", "Your appointment request has been submitted to the clinic.");
@@ -96,7 +64,6 @@ export default function PatientAppointmentsScreen() {
       setPreferredDate('');
       setPreferredTime('');
       setNotes('');
-      fetchAppointments();
     } catch (error) {
       console.error("Error booking appointment:", error);
       Alert.alert("Error", "Failed to submit appointment request.");
@@ -125,6 +92,7 @@ export default function PatientAppointmentsScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <QueueButton label="Check In / My Queue" onPress={() => router.push('/check-in')} />
         
         {loading ? (
           <View style={styles.loaderContainer}>
@@ -145,12 +113,12 @@ export default function PatientAppointmentsScreen() {
                   <Ionicons name="time-outline" size={14} color="#0D9488" />
                   <Text style={styles.badgeText}>{item.status || 'Confirmed'}</Text>
                 </View>
-                <Text style={styles.timeText}>{item.time}</Text>
+              <Text style={styles.timeText}>{item.appointmentTime || item.time}</Text>
               </View>
 
-              <Text style={styles.appointmentType}>{item.type || 'Prenatal Consultation'}</Text>
+              <Text style={styles.appointmentType}>{item.purpose || item.type || 'Prenatal Consultation'}</Text>
               <Text style={styles.appointmentDate}>
-                <Ionicons name="calendar" size={13} color="#64748B" /> {item.date}
+                <Ionicons name="calendar" size={13} color="#64748B" /> {item.appointmentDate || item.date}
               </Text>
               {item.doctor && (
                 <Text style={styles.doctorText}>Attending: {item.doctor}</Text>

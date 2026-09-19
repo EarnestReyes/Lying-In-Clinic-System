@@ -4,6 +4,7 @@ import {
   StyleSheet,
   Text,
 } from "react-native";
+import { Colors } from "../src/theme/colors";
 
 interface ButtonProps {
   title: string;
@@ -29,7 +30,7 @@ export default function Button({
       ]}
     >
       {loading ? (
-        <ActivityIndicator color="#FFFFFF" />
+        <ActivityIndicator color={Colors.surface} />
       ) : (
         <Text style={styles.text}>{title}</Text>
       )}
@@ -41,14 +42,14 @@ const styles = StyleSheet.create({
   button: {
     minHeight: 52,
     borderRadius: 16,
-    backgroundColor: "#2563EB",
+    backgroundColor: Colors.infoStrong,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 20,
   },
 
   text: {
-    color: "#FFFFFF",
+    color: Colors.surface,
     fontSize: 16,
     fontWeight: "700",
   },

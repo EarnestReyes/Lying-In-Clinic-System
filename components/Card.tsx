@@ -3,6 +3,7 @@ import {
   View,
   ViewProps,
 } from "react-native";
+import { Colors } from "../src/theme/colors";
 
 export default function Card({
   children,
@@ -21,12 +22,12 @@ export default function Card({
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: "#FFFFFF",
+    backgroundColor: Colors.surface,
     borderRadius: 20,
     padding: 20,
     marginBottom: 16,
 
-    shadowColor: "#000",
+    shadowColor: Colors.overlay,
     shadowOffset: {
       width: 0,
       height: 5,

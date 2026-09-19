@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -12,6 +12,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { assertAppointmentSlotAvailable, createAppointment } from '../../../src/services/appointmentService';
+import { fetchPatientById } from '../../../src/services/patientService';
 
 const APPOINTMENT_TYPES = [
   'Prenatal Checkup',
@@ -33,13 +35,56 @@ export default function ScheduleAppointmentScreen() {
   const [selectedDate, setSelectedDate] = useState('Oct 2, 2026');
   const [selectedTime, setSelectedTime] = useState('09:00 AM');
   const [remarks, setRemarks] = useState('');
+  const [patientName, setPatientName] = useState('');
+  const [loadingPatient, setLoadingPatient] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSaveAppointment = () => {
-    Alert.alert(
-      'Appointment Confirmed', 
-      `Successfully scheduled ${selectedType} for ${selectedDate} at ${selectedTime}.`, 
-      [{ text: 'OK', onPress: () => router.back() }]
-    );
+  useEffect(() => {
+    const loadPatient = async () => {
+      if (typeof id !== 'string') {
+        setLoadingPatient(false);
+        return;
+      }
+      try {
+        const patient = await fetchPatientById(id);
+        setPatientName(patient?.name || patient?.firstName || '');
+      } catch (error) {
+        console.error('Unable to load patient for appointment:', error);
+      } finally {
+        setLoadingPatient(false);
+      }
+    };
+    loadPatient();
+  }, [id]);
+
+  const handleSaveAppointment = async () => {
+    if (typeof id !== 'string' || !patientName) {
+      Alert.alert('Patient unavailable', 'This appointment must be linked to a valid patient record.');
+      return;
+    }
+    if (!selectedDate.trim()) {
+      Alert.alert('Date required', 'Enter an appointment date before scheduling.');
+      return;
+    }
+    try {
+      setSubmitting(true);
+      await assertAppointmentSlotAvailable(selectedDate.trim(), selectedTime);
+      await createAppointment({
+        patientId: id,
+        patientName,
+        appointmentDate: selectedDate.trim(),
+        appointmentTime: selectedTime,
+        purpose: selectedType,
+        notes: remarks.trim(),
+        status: 'Scheduled' as any,
+      });
+      Alert.alert('Appointment Confirmed', `Successfully scheduled ${selectedType} for ${selectedDate} at ${selectedTime}.`, [{ text: 'OK', onPress: () => router.back() }]);
+    } catch (error) {
+      console.error('Unable to schedule appointment:', error);
+      Alert.alert('Unable to schedule', 'The appointment was not saved. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -58,6 +103,7 @@ export default function ScheduleAppointmentScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {loadingPatient ? <Text style={styles.patientContext}>Loading patient record…</Text> : <Text style={styles.patientContext}>{patientName ? `Scheduling for: ${patientName}` : 'Patient record unavailable'}</Text>}
         
         {/* Appointment Type Selection */}
         <View style={styles.sectionCard}>
@@ -134,8 +180,8 @@ export default function ScheduleAppointmentScreen() {
         </View>
 
         {/* Submit Button */}
-        <TouchableOpacity style={styles.submitButton} activeOpacity={0.8} onPress={handleSaveAppointment}>
-          <Text style={styles.submitButtonText}>Confirm and Schedule</Text>
+        <TouchableOpacity style={[styles.submitButton, (submitting || loadingPatient || !patientName) && styles.submitButtonDisabled]} activeOpacity={0.8} onPress={handleSaveAppointment} disabled={submitting || loadingPatient || !patientName}>
+          <Text style={styles.submitButtonText}>{submitting ? 'Scheduling…' : 'Confirm and Schedule'}</Text>
         </TouchableOpacity>
 
       </ScrollView>
@@ -176,6 +222,12 @@ const styles = StyleSheet.create({
     maxWidth: 800,
     alignSelf: 'center',
     width: '100%',
+  },
+  patientContext: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0D9488',
+    marginBottom: 14,
   },
   sectionCard: {
     backgroundColor: '#FFFFFF',
@@ -295,6 +347,9 @@ const styles = StyleSheet.create({
     elevation: 4,
     marginBottom: 30,
     marginTop: 4,
+  },
+  submitButtonDisabled: {
+    backgroundColor: '#94A3B8',
   },
   submitButtonText: {
     color: '#FFFFFF',

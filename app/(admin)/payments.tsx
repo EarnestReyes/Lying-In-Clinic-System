@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -8,9 +8,12 @@ import {
   StatusBar,
   TextInput,
   TouchableOpacity,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { PatientRecordSearch } from '../../components/PatientRecordSearch';
+import { subscribePayments } from '../../src/services/paymentService';
 
 // Mock Patient Financial Assistance records
 const FINANCIAL_RECORDS = [
@@ -82,8 +85,38 @@ export default function PatientFinancialScreen() {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('All');
+  const [records, setRecords] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const filteredRecords = FINANCIAL_RECORDS.filter(record => {
+  useEffect(() => {
+    return subscribePayments((payments) => {
+      const currency = (amount: unknown) => `₱${(Number(amount) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      setRecords(payments.map((payment) => {
+        const data: any = payment;
+        const totalAmount = Number(data.totalAmount ?? data.amount) || 0;
+        const assistanceAmount = Number(data.totalAssistance) || (data.assistance || []).reduce((total: number, item: any) => total + (Number(item.amount) || 0), 0);
+        const balance = Number(data.patientBalance ?? data.amount ?? totalAmount - assistanceAmount) || 0;
+        const status = data.status === 'paid' || balance === 0 ? 'Fully Paid' : assistanceAmount > 0 ? 'Pending Assistance' : 'Pending Balance';
+        return {
+          id: data.referenceNumber || `FIN-${payment.id.slice(-6).toUpperCase()}`,
+          patientName: data.patientName || 'Unnamed patient',
+          date: data.paymentDate || 'Date not recorded',
+          items: (data.items?.length ? data.items : [{ name: data.description || 'Financial record', amount: totalAmount }]).map((item: any) => ({ name: item.name, amount: currency(item.amount) })),
+          totalAmount: currency(totalAmount),
+          assistance: (data.assistance || []).map((item: any) => ({ provider: item.provider, amount: currency(item.amount), status: item.status || 'Pending' })),
+          patientBalance: currency(balance),
+          status,
+          statusColor: status === 'Fully Paid' ? '#10B981' : status === 'Pending Assistance' ? '#3B82F6' : '#F59E0B',
+        };
+      }));
+      setLoading(false);
+    }, (error) => {
+      console.error('Unable to load financial records:', error);
+      setLoading(false);
+    });
+  }, []);
+
+  const filteredRecords = records.filter(record => {
     const matchesSearch = record.patientName.toLowerCase().includes(searchQuery.toLowerCase()) ||
                           record.id.toLowerCase().includes(searchQuery.toLowerCase());
     if (activeTab === 'All') return matchesSearch;
@@ -100,64 +133,12 @@ export default function PatientFinancialScreen() {
       {/* Outer App Shell Container */}
       <View style={styles.appShell}>
         
-        {/* Left Sidebar Menu */}
-        <View style={styles.sidebar}>
-          <View style={styles.logoContainer}>
-            <View style={styles.logoIconBox}>
-              <Ionicons name="medical" size={20} color="#FFFFFF" />
-            </View>
-            <Text style={styles.logoText}>Lying-In Clinic</Text>
-          </View>
-
-          <Text style={styles.navCategory}>Main Menu</Text>
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/dashboard' as any)}>
-            <Ionicons name="grid-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Dashboard</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/patients' as any)}>
-            <Ionicons name="people-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Patients</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/appointments' as any)}>
-            <Ionicons name="calendar-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Appointments</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.navCategory}>Other Menu</Text>
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.push('/(admin)/inventory' as any)}>
-            <Ionicons name="medkit-outline" size={18} color="#64748B" style={styles.navIcon} />
-            <Text style={styles.navText}>Inventory</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.navItem, styles.navItemActive]} activeOpacity={0.8}>
-            <Ionicons name="wallet" size={18} color="#0D9488" style={styles.navIcon} />
-            <Text style={[styles.navText, styles.navTextActive]}>Financial Tracking</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.navCategory}>Help & Settings</Text>
-          <TouchableOpacity style={styles.navItem} activeOpacity={0.8} onPress={() => router.replace('/(auth)/login' as any)}>
-            <Ionicons name="log-out-outline" size={18} color="#EF4444" style={styles.navIcon} />
-            <Text style={[styles.navText, { color: '#EF4444' }]}>Log Out</Text>
-          </TouchableOpacity>
-        </View>
-
         {/* Main Content Area */}
         <View style={styles.mainContent}>
           
           {/* Top Navigation Bar */}
           <View style={styles.topNavbar}>
-            <View style={styles.searchBox}>
-              <Ionicons name="search" size={16} color="#94A3B8" style={{ marginRight: 8 }} />
-              <TextInput 
-                placeholder="Search patient name, reference..."
-                placeholderTextColor="#94A3B8"
-                style={styles.searchInput}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-              />
-            </View>
+            <PatientRecordSearch />
 
             <View style={styles.topNavRight}>
               <TouchableOpacity style={styles.topIconButton}>
@@ -216,7 +197,9 @@ export default function PatientFinancialScreen() {
 
             {/* Financial Cards List */}
             <View style={styles.listContainer}>
-              {filteredRecords.length > 0 ? (
+              {loading ? (
+                <View style={styles.emptyContainer}><ActivityIndicator size="large" color="#0D9488" /><Text style={styles.emptyText}>Loading financial records...</Text></View>
+              ) : filteredRecords.length > 0 ? (
                 filteredRecords.map(record => (
                   <View key={record.id} style={styles.financialCard}>
                     
@@ -249,7 +232,7 @@ export default function PatientFinancialScreen() {
                       {/* Left Side: Service Items Breakdown */}
                       <View style={styles.breakdownColumn}>
                         <Text style={styles.columnTitle}>Itemized Expenses</Text>
-                        {record.items.map((item, idx) => (
+                        {record.items.map((item: { name: string; amount: string }, idx: number) => (
                           <View key={idx} style={styles.rowItem}>
                             <Text style={styles.rowItemName}>{item.name}</Text>
                             <Text style={styles.rowItemAmount}>{item.amount}</Text>
@@ -265,7 +248,7 @@ export default function PatientFinancialScreen() {
                       <View style={styles.breakdownColumnSecondary}>
                         <Text style={styles.columnTitle}>Assistance & Balance</Text>
                         {record.assistance.length > 0 ? (
-                          record.assistance.map((asst, idx) => (
+                          record.assistance.map((asst: { provider: string; amount: string; status: string }, idx: number) => (
                             <View key={idx} style={styles.rowItem}>
                               <View>
                                 <Text style={styles.rowItemName}>{asst.provider}</Text>
@@ -314,73 +297,13 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
   },
-  sidebar: {
-    width: 240,
-    backgroundColor: '#FFFFFF',
-    borderRightWidth: 1,
-    borderRightColor: '#E2E8F0',
-    paddingVertical: 24,
-    paddingHorizontal: 16,
-  },
-  logoContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 32,
-    paddingHorizontal: 8,
-  },
-  logoIconBox: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: '#0D9488',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 10,
-  },
-  logoText: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  navCategory: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#94A3B8',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginTop: 20,
-    marginBottom: 10,
-    paddingHorizontal: 8,
-  },
-  navItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    marginBottom: 4,
-  },
-  navItemActive: {
-    backgroundColor: '#CCFBF1',
-  },
-  navIcon: {
-    marginRight: 12,
-  },
-  navText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  navTextActive: {
-    color: '#0D9488',
-    fontWeight: '700',
-  },
   mainContent: {
     flex: 1,
     backgroundColor: '#F8FAFC',
     flexDirection: 'column',
   },
   topNavbar: {
+    position: 'relative', zIndex: 100, elevation: 100,
     height: 70,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,

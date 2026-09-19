@@ -16,6 +16,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { subscribePatientData } from '../../src/(patient)/patientService';
+import { updatePatientProfile } from '../../src/(patient)/profileService';
+import { auth } from '../../src/config/firebase';
 
 export default function PatientProfileScreen() {
   const router = useRouter();
@@ -29,14 +31,18 @@ export default function PatientProfileScreen() {
   const [phone, setPhone] = useState('');
   const [profileImage, setProfileImage] = useState<string | null>(null);
 
-  const patientUid = "spCRyTr79TaIAPDQMQLN6t1keqg2"; 
+  const patientUid = auth.currentUser?.uid;
 
   useEffect(() => {
+    if (!patientUid) {
+      setLoading(false);
+      return;
+    }
     const unsubscribe = subscribePatientData(patientUid, (data) => {
       if (data) {
         setPatientData(data);
         setName(data.name || '');
-        setPhone(data.phone || '');
+        setPhone(data.contactNumber || data.phone || '');
         if (data.profileImage) {
           setProfileImage(data.profileImage);
         }
@@ -45,7 +51,7 @@ export default function PatientProfileScreen() {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [patientUid]);
 
   // Function to pick image from library or camera
   const handlePickImage = async () => {
@@ -100,10 +106,19 @@ export default function PatientProfileScreen() {
     );
   };
 
-  const handleSave = () => {
-    // Here you would typically save changes (including profileImage URI or base64) to your database/backend
-    setIsEditing(false);
-    Alert.alert("Success", "Profile updated successfully!");
+  const handleSave = async () => {
+    if (!patientUid || !name.trim()) {
+      Alert.alert('Unable to save', 'Please sign in and provide your name.');
+      return;
+    }
+    try {
+      await updatePatientProfile(patientUid, { name: name.trim(), contactNumber: phone.trim() });
+      setIsEditing(false);
+      Alert.alert("Success", "Profile updated successfully!");
+    } catch (error) {
+      console.error('Unable to update patient profile:', error);
+      Alert.alert('Unable to save', 'Profile changes were not saved. Please try again.');
+    }
   };
 
   return (
@@ -168,13 +183,16 @@ export default function PatientProfileScreen() {
               
               <Text style={styles.profileNameText}>{name || "Patient"}</Text>
               <Text style={styles.profileSubText}>
-                {isEditing ? "Tap photo to change avatar" : `UID: ${patientUid.substring(0, 10)}...`}
+                {isEditing ? "Tap photo to change avatar" : patientUid ? `UID: ${patientUid.substring(0, 10)}...` : 'Sign in required'}
               </Text>
             </View>
 
-            {/* Personal Information Form Card */}
+            {/* About You / Personal Information Card */}
             <View style={styles.card}>
-              <Text style={styles.cardSectionTitle}>Personal Information</Text>
+              <View style={styles.cardTitleRow}>
+                <Ionicons name="person-circle-outline" size={20} color="#0D9488" />
+                <Text style={styles.cardSectionTitle}>About You</Text>
+              </View>
 
               <Text style={styles.inputLabel}>Full Name</Text>
               <TextInput
@@ -196,8 +214,14 @@ export default function PatientProfileScreen() {
                 placeholderTextColor="#94A3B8"
                 keyboardType="phone-pad"
               />
+            </View>
 
-              <Text style={[styles.cardSectionTitle, { marginTop: 20 }]}>Pregnancy Details</Text>
+            {/* Pregnancy Details Card */}
+            <View style={styles.card}>
+              <View style={styles.cardTitleRow}>
+                <Ionicons name="fitness-outline" size={20} color="#0D9488" />
+                <Text style={styles.cardSectionTitle}>Pregnancy Details</Text>
+              </View>
               
               <View style={styles.infoRow}>
                 <Text style={styles.infoLabel}>Pregnancy Week</Text>
@@ -209,7 +233,7 @@ export default function PatientProfileScreen() {
                 <Text style={styles.infoValue}>{patientData?.edd || "N/A"}</Text>
               </View>
 
-              <View style={styles.infoRow}>
+              <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
                 <Text style={styles.infoLabel}>Blood Type</Text>
                 <Text style={styles.infoValue}>{patientData?.bloodType || "N/A"}</Text>
               </View>
@@ -340,12 +364,21 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.03,
     shadowRadius: 4,
     elevation: 1,
+    marginBottom: 16,
+  },
+  cardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+    paddingBottom: 10,
   },
   cardSectionTitle: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '800',
     color: '#0F172A',
-    marginBottom: 14,
   },
   inputLabel: {
     fontSize: 12,
@@ -374,7 +407,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#F1F5F9',
   },

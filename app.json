@@ -31,6 +31,13 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
+      ],
+      "@react-native-community/datetimepicker",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Lying-In Clinic to use your location for optional in-app directions to the clinic."
+        }
       ]
     ],
     "experiments": {
