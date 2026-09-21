@@ -68,6 +68,19 @@ export const authService = {
     return snapshot.exists() ? ({ id: snapshot.id, ...snapshot.data() } as AppUser) : null;
   },
 
+  registerCompanionAccount: async (email: string, password: string, fullName: string): Promise<string> => {
+    if (!fullName.trim()) throw new Error('Enter your name.');
+    if (auth.currentUser) throw new Error('Sign out before creating a companion account.');
+    const credential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+    try {
+      await setDoc(doc(db, 'users', credential.user.uid), { email: credential.user.email, fullName: fullName.trim(), role: 'companion', createdAt: serverTimestamp() });
+    } catch (error) {
+      await credential.user.delete().catch(() => signOut(auth));
+      throw error;
+    }
+    return credential.user.uid;
+  },
+
   registerPatientAccount: async (email: string, password: string, fullName: string): Promise<string> => {
     const credential = await createUserWithEmailAndPassword(auth, email, password);
     await setDoc(doc(db, 'users', credential.user.uid), {

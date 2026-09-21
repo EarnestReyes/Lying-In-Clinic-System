@@ -24,6 +24,14 @@ export interface Appointment {
   status: AppointmentStatus;
 
   notes?: string;
+  doctor?: string;
+  assignedStaff?: string;
+  assignedMidwife?: string;
+  cancellationReason?: string;
+  confirmedAt?: any;
+  confirmedBy?: string;
+  cancelledAt?: any;
+  cancelledBy?: string;
 
   /** Legacy field aliases retained while existing records are migrated. */
   date?: string;

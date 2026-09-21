@@ -1,5 +1,7 @@
+import { DocumentsPanel } from './DocumentsPanel';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, BackHandler, ScrollView, Text, View } from 'react-native';
+import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CarePlan, CareQuestion, CareRecap, CareTask, CompanionShare, emptyCarePlan, mergePassport } from '../../src/models/Care';
 import { Reminder } from '../../src/models/reminder';
@@ -28,6 +30,42 @@ export function CareWorkspace({ patientId, patientName, staff = false, onBack }:
   const [ready, setReady] = useState(false);
   const [retry, setRetry] = useState(0);
   const lock = useRef(false);
+
+  const returnToHub = () => {
+    setSection('Passport');
+    setNotice('');
+    setActionError('');
+  };
+
+  const handleBack = () => {
+    if (!staff && section !== 'Passport') {
+      returnToHub();
+      return;
+    }
+
+    if (onBack) {
+      onBack();
+      return;
+    }
+
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+
+    router.replace(staff ? '/(admin)/care' : '/(patient)/care');
+  };
+
+  useEffect(() => {
+    if (staff || section === 'Passport') return;
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      returnToHub();
+      return true;
+    });
+
+    return () => subscription.remove();
+  }, [section, staff]);
 
   useEffect(() => {
     setReady(false); setConnectionError('');
@@ -58,7 +96,7 @@ export function CareWorkspace({ patientId, patientName, staff = false, onBack }:
 
   return (
     <SafeAreaView style={s.safeArea} edges={['top', 'left', 'right']}>
-      <CareHeader title={staff ? `Care Workspace: ${patientName}` : 'My Care Space'} onBack={onBack} />
+      <CareHeader title={staff ? `Care Workspace: ${patientName}` : 'My Care Space'} onBack={handleBack} />
       <ScrollView style={s.page} contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
         <View style={s.hero}>
           <Text style={s.eyebrow}>{staff ? 'PATIENT CARE' : 'MY CARE · MY CHOICES'}</Text>
@@ -66,7 +104,7 @@ export function CareWorkspace({ patientId, patientName, staff = false, onBack }:
           <Text style={s.heroText}>{staff ? 'Review preparation, respond to shared questions and approve visit recaps.' : 'A personal space for your preparation, questions, visit notes and trusted support.'}</Text>
         </View>
         <View style={s.row}>
-          {(staff ? ['Passport', 'Questions', 'Visit recaps'] : ['Passport', 'Questions', 'Visit recaps', 'Companions']).map(item => (
+          {(staff ? ['Passport', 'Questions', 'Visit recaps'] : ['Passport', 'Documents', 'Questions', 'Visit recaps', 'Companions']).map(item => (
             <CareButton key={item} label={item} secondary={section !== item} disabled={busy} onPress={() => { setSection(item); setNotice(''); setActionError(''); }} />
           ))}
         </View>
@@ -74,6 +112,7 @@ export function CareWorkspace({ patientId, patientName, staff = false, onBack }:
         {!!actionError && <Text accessibilityRole="alert" style={s.error}>{actionError}</Text>}
         {!!notice && <Text accessibilityLiveRegion="polite" style={s.notice}>{notice}</Text>}
         {(!ready || busy) && !connectionError && <ActivityIndicator color="#0D9488" />}
+        {section === 'Documents' && !staff && <DocumentsPanel patientId={patientId} patientName={patientName} />}
         {ready && !connectionError && <>
           {section === 'Passport' && <PassportPanel patientId={patientId} tasks={merged} plan={plan} staff={staff} busy={busy} run={run} />}
           {section === 'Questions' && <QuestionsPanel patientId={patientId} questions={questions} shared={shared} staff={staff} busy={busy} run={run} />}

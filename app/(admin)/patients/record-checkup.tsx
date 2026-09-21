@@ -12,6 +12,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { addPrenatalVisit } from '../../../src/services/patientRecordService';
+import { clinicDay } from '../../../src/utils/queue';
 
 export default function RecordCheckupScreen() {
   const router = useRouter();
@@ -23,6 +25,8 @@ export default function RecordCheckupScreen() {
   const [fhr, setFhr] = useState('');
   const [gestationWeeks, setGestationWeeks] = useState('');
   const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
 
   const handleRunAiAnalysis = () => {
@@ -44,10 +48,21 @@ export default function RecordCheckupScreen() {
     }
   };
 
-  const handleSaveCheckup = () => {
-    Alert.alert('Success', 'New prenatal checkup record saved and synced with patient profile!', [
-      { text: 'OK', onPress: () => router.back() }
-    ]);
+  const handleSaveCheckup = async () => {
+    if (saving) return;
+    const patientId = Array.isArray(id) ? id[0] : id;
+    if (!patientId || ![systolic, diastolic, weight].every(value => Number.isFinite(Number(value)) && Number(value) > 0)) {
+      setSaveError('Select a patient and enter positive blood pressure and weight values.'); return;
+    }
+    setSaving(true); setSaveError('');
+    try {
+      await addPrenatalVisit(patientId, { visitNo: 'Prenatal checkup', date: clinicDay(), bp: `${systolic}/${diastolic}`, weight, fhb: fhr, gestationalAge: gestationWeeks, notes }, {
+        bloodPressure: `${systolic}/${diastolic}`, bp: `${systolic}/${diastolic}`, weight, fhb: fhr,
+        ...(gestationWeeks && Number.isFinite(Number(gestationWeeks)) ? { pregnancyWeek: Number(gestationWeeks) } : {}),
+      });
+      router.back();
+    } catch (error) { setSaveError(error instanceof Error ? error.message : 'Unable to save checkup.'); }
+    finally { setSaving(false); }
   };
 
   return (
@@ -66,6 +81,8 @@ export default function RecordCheckupScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {!!saveError && <Text style={{ color: '#DC2626' }}>{saveError}</Text>}
+        {saving && <Text style={{ color: '#0D9488' }}>Saving checkup…</Text>}
         
         {/* Form Section */}
         <View style={styles.formCard}>

@@ -11,6 +11,9 @@ export function CareHeader({ title, onBack, rightActionLabel, onRightAction }: {
         style={s.backButton} 
         onPress={onBack ? onBack : () => router.back()} 
         activeOpacity={0.8}
+        hitSlop={10}
+        accessibilityRole="button"
+        accessibilityLabel="Go back"
       >
         <Ionicons name="arrow-back" size={20} color={C.textPrimary} />
       </TouchableOpacity>
@@ -26,7 +29,7 @@ export function CareHeader({ title, onBack, rightActionLabel, onRightAction }: {
           <Text style={s.editToggleText}>{rightActionLabel}</Text>
         </TouchableOpacity>
       ) : (
-        <View style={{ width: 40 }} /> // Spacer to keep title centered if no right action exists
+        <View style={{ width: 40 }} />
       )}
     </View>
   );
@@ -58,8 +61,6 @@ export function CareCheck({ checked, label, onPress, disabled }: { checked: bool
 export const s = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: C.pageBackground },
   page: { flex: 1, backgroundColor: C.pageBackground },
-  
-  // Header styles matching your requested layout structure
   header: { 
     flexDirection: 'row', 
     alignItems: 'center', 
@@ -95,7 +96,6 @@ export const s = StyleSheet.create({
     fontWeight: '600',
     color: C.primary,
   },
-
   content: { padding: 20, paddingBottom: 110, gap: 18, maxWidth: 1080, width: '100%', alignSelf: 'center' },
   hero: { backgroundColor: C.primaryDeep, borderRadius: 24, padding: 24, gap: 12 },
   eyebrow: { color: C.primarySoft, fontSize: 11, fontWeight: '800', letterSpacing: 2 },

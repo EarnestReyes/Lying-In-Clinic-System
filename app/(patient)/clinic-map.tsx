@@ -8,6 +8,7 @@ import { CLINIC } from '../../src/config/clinic';
 import { Colors } from '../../src/theme/colors';
 import { ClinicLocation } from '../../src/models/ClinicLocation';
 import { subscribeClinicLocation } from '../../src/services/clinicLocationService';
+import { openAppSettings, requestForegroundLocationPermission } from '../../src/services/permissionService';
 
 const region = {
   ...CLINIC.coordinates,
@@ -24,6 +25,7 @@ export default function ClinicMapScreen() {
   const [routeSummary, setRouteSummary] = useState<string | null>(null);
   const [guiding, setGuiding] = useState(false);
   const [guidanceError, setGuidanceError] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
   const [clinic, setClinic] = useState<ClinicLocation>(CLINIC);
 
   useEffect(() => () => watchRef.current?.remove(), []);
@@ -46,10 +48,16 @@ export default function ClinicMapScreen() {
 
   const startGuidance = async () => {
     setGuidanceError(null);
+    setShowSettings(false);
     setGuiding(true);
     try {
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (permission.status !== 'granted') throw new Error('Location permission is needed to show your route.');
+      const permission = await requestForegroundLocationPermission();
+      if (permission.state !== 'granted') {
+        setShowSettings(permission.state === 'blocked');
+        throw new Error(permission.state === 'blocked'
+          ? 'Location is disabled for this app. Enable it in Settings to start a route.'
+          : 'Location permission is needed to show your route.');
+      }
       const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const origin = { latitude: position.coords.latitude, longitude: position.coords.longitude };
       setPatientLocation(origin);
@@ -88,7 +96,7 @@ export default function ClinicMapScreen() {
           {guiding ? <ActivityIndicator size="small" color={Colors.surface} /> : <><Ionicons name="navigate" size={15} color={Colors.surface} /><Text style={styles.guidanceText}>{routeSummary ? 'Refresh' : 'Start route'}</Text></>}
         </TouchableOpacity>
       </View>
-      {guidanceError ? <Text style={styles.error}>{guidanceError}</Text> : <Text style={styles.note}>Start route to use your location and view an in-app road route to this clinic. Your location is not saved.</Text>}
+      {guidanceError ? <View style={styles.errorRow}><Text style={styles.error}>{guidanceError}</Text>{showSettings && <TouchableOpacity onPress={() => void openAppSettings()}><Text style={styles.settingsText}>Open Settings</Text></TouchableOpacity>}</View> : <Text style={styles.note}>Start route to use your location and view an in-app road route to this clinic. Your location is not saved.</Text>}
     </SafeAreaView>
   );
 }
@@ -109,5 +117,7 @@ const styles = StyleSheet.create({
   guidanceText: { color: Colors.surface, fontWeight: '800', fontSize: 11 },
   userLocationDot: { width: 16, height: 16, borderRadius: 8, backgroundColor: Colors.infoStrong, borderWidth: 3, borderColor: Colors.surface },
   note: { position: 'absolute', left: 24, right: 24, bottom: 15, color: Colors.textMuted, textAlign: 'center', fontSize: 10, lineHeight: 14 },
-  error: { position: 'absolute', left: 24, right: 24, bottom: 15, color: Colors.danger, textAlign: 'center', fontSize: 10, lineHeight: 14 },
+  errorRow: { position: 'absolute', left: 24, right: 24, bottom: 10, alignItems: 'center', gap: 2 },
+  error: { color: Colors.danger, textAlign: 'center', fontSize: 10, lineHeight: 14 },
+  settingsText: { color: Colors.primary, fontSize: 11, fontWeight: '800', padding: 4 },
 });

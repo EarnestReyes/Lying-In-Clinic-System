@@ -1,20 +1,20 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   StyleSheet,
   Text,
   View,
   TextInput,
   TouchableOpacity,
-  SafeAreaView,
   StatusBar,
   Platform,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-
-// Import your custom authService and Firestore config
 import { authService } from '../../src/services/authService';
+import { hasCompletedPermissionOnboarding } from '../../src/services/permissionService';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -22,41 +22,37 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const loginLock = useRef(false);
 
-  // Check if the current device is running on the web
   const isWeb = Platform.OS === 'web';
 
   const handleLogin = async () => {
+    if (loginLock.current) return;
     if (!email || !password) {
       setErrorMessage('Please enter both email and password.');
+      setSuccessMessage('');
       return;
     }
 
     setErrorMessage('');
+    setSuccessMessage('');
     setLoading(true);
+    loginLock.current = true;
 
     try {
-      // 1. Authenticate using authService
       const user = await authService.login(email, password);
-
-      // 2. Fetch user role from Firestore to enforce portal security
       const userDoc = await authService.getUserProfile(user.uid);
 
       if (!userDoc) {
-        setLoading(false);
         setErrorMessage('User record not found in the database.');
         await authService.logout();
         return;
       }
 
-      const userRole = userDoc.role; // expected: 'staff', 'midwife', or 'patient'
-
-      setLoading(false);
-
-      // 3. Platform & Role Access Validation
+      const userRole = userDoc.role;
       if (isWeb) {
-        // Web Portal: Restricted to staff and midwives
         if (userRole === 'staff' || userRole === 'midwife') {
           router.replace('/(admin)/dashboard' as any);
         } else {
@@ -64,18 +60,23 @@ export default function LoginScreen() {
           await authService.logout();
         }
       } else {
-        // Mobile App: Restricted to patients
-        if (userRole === 'patient') {
-          router.replace(returnTo === 'check-in' ? '/check-in' : '/(patient)/home' as any);
+        if (userRole === 'companion') {
+          router.replace('/companion' as any);
+        } else if (userRole === 'patient') {
+          const completed = await hasCompletedPermissionOnboarding(user.uid);
+          if (!completed) {
+            router.replace((returnTo === 'check-in'
+              ? '/(patient)/permission-onboarding?next=check-in'
+              : '/(patient)/permission-onboarding') as any);
+          } else {
+            router.replace(returnTo === 'check-in' ? '/check-in' : '/(patient)/home' as any);
+          }
         } else {
           setErrorMessage('Access denied. Staff and midwives must use the web portal.');
           await authService.logout();
         }
       }
-
     } catch (error: any) {
-      setLoading(false);
-      // Friendly error handling for common Firebase Auth issues
       const message = error.message || '';
       if (message.includes('invalid-credential') || message.includes('user-not-found') || message.includes('wrong-password')) {
         setErrorMessage('Invalid email or password. Please try again.');
@@ -84,169 +85,266 @@ export default function LoginScreen() {
       } else {
         setErrorMessage(message || 'Failed to sign in. Please try again.');
       }
+    } finally {
+      loginLock.current = false;
+      setLoading(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#0D9488" />
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+    >
+      <StatusBar barStyle="light-content" backgroundColor="#0F766E" />
       
-      <View style={styles.card}>
-        <View style={styles.iconContainer}>
-          <Ionicons 
-            name={isWeb ? "desktop-outline" : "phone-portrait-outline"} 
-            size={36} 
-            color="#0D9488" 
-          />
+      {/* Top Header Text Section with Expanded Space */}
+      <View style={styles.headerContainer}>
+        <View style={styles.headerBadge}>
+          <Ionicons name="medical" size={14} color="#99F6E4" />
+          <Text style={styles.headerBadgeText}>Maternal Health Portal</Text>
         </View>
-
-        <Text style={styles.title}>Lying-In Center Portal</Text>
-        
-        {/* Dynamic subtitle letting the user know their portal type */}
-        <Text style={styles.subtitle}>
-          {isWeb ? "Staff & Midwife Web Portal" : "Patient Mobile Portal"}
-        </Text>
-
-        {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
-
-        <View style={styles.inputContainer}>
-          <Ionicons name="mail-outline" size={20} color="#64748B" style={styles.inputIcon} />
-          <TextInput
-            style={styles.input}
-            placeholder={isWeb ? "Staff Email" : "Patient Email"}
-            placeholderTextColor="#94A3B8"
-            value={email}
-            onChangeText={setEmail}
-            autoCapitalize="none"
-            keyboardType="email-address"
-          />
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Ionicons name="lock-closed-outline" size={20} color="#64748B" style={styles.inputIcon} />
-          <TextInput
-            style={styles.input}
-            placeholder="Password"
-            placeholderTextColor="#94A3B8"
-            secureTextEntry
-            value={password}
-            onChangeText={setPassword}
-          />
-        </View>
-
-        <TouchableOpacity 
-          style={styles.loginButton} 
-          activeOpacity={0.8} 
-          onPress={handleLogin}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <Text style={styles.loginButtonText}>
-              {isWeb ? "Sign In as Staff" : "Sign In as Patient"}
-            </Text>
-          )}
-        </TouchableOpacity>
-
-        <Text style={styles.platformNotice}>
-          {isWeb 
-            ? "🔒 Web access restricted to Authorized Staff & Midwives." 
-            : "📱 Mobile access restricted to Registered Patients."}
+        <Text style={styles.headerTitle}>
+          Log In to stay on top of your care and schedules.
         </Text>
       </View>
-    </SafeAreaView>
+
+      {/* Floating Bottom Form Card with Keyboard-Aware ScrollView */}
+      <View style={styles.cardContainer}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+
+          <View style={styles.cardHeaderRow}>
+            <Text style={styles.cardTitle}>Login</Text>
+            <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
+              <Text style={styles.signUpText}>Back</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.portalSubLabel}>
+            {isWeb ? "Staff & Midwife Web Portal" : "Patient Mobile Portal"}
+          </Text>
+
+          {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+          {successMessage ? <Text style={styles.successText}>{successMessage}</Text> : null}
+
+          {/* Email Field */}
+          <View style={styles.inputWrapper}>
+            <Ionicons name="mail-outline" size={18} color="#64748B" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder={isWeb ? "Staff Email" : "Patient Email"}
+              placeholderTextColor="#94A3B8"
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+            />
+          </View>
+
+          {/* Password Field */}
+          <View style={styles.inputWrapper}>
+            <Ionicons name="lock-closed-outline" size={18} color="#64748B" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="Password"
+              placeholderTextColor="#94A3B8"
+              secureTextEntry
+              value={password}
+              onChangeText={setPassword}
+            />
+          </View>
+
+          {/* Forgot Password Link -> Directs to forgotPass.tsx */}
+          <TouchableOpacity
+            style={styles.forgotPasswordContainer}
+            onPress={() => router.push('/(auth)/forgotPass' as any)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+          </TouchableOpacity>
+
+          {/* Login Action Button */}
+          <TouchableOpacity
+            style={styles.loginButton}
+            activeOpacity={0.85}
+            onPress={handleLogin}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text style={styles.loginButtonText}>
+                {isWeb ? "Sign In as Staff" : "Login"}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          {!isWeb && <TouchableOpacity onPress={() => router.push('/companion-register' as any)} style={{ padding: 16 }}><Text style={{ color: '#0D9488', fontWeight: '700' }}>Create a companion account</Text></TouchableOpacity>}
+          <Text style={styles.platformNotice}>
+            {isWeb ? "🔒 Authorized Staff & Midwives Only" : "📱 Patients & Companions"}
+          </Text>
+
+        </ScrollView>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
+    backgroundColor: '#0F766E',
   },
-  card: {
-    width: '100%',
-    maxWidth: 400,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    padding: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 4,
-    alignItems: 'center',
+  headerContainer: {
+    flex: 0.45,
+    paddingHorizontal: 28,
+    justifyContent: 'flex-end',
+    paddingBottom: 32,
+    paddingTop: 40,
   },
-  iconContainer: {
-    width: 70,
-    height: 70,
+  headerBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
     borderRadius: 20,
-    backgroundColor: '#CCFBF1',
-    justifyContent: 'center',
-    alignItems: 'center',
+    alignSelf: 'flex-start',
     marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.25)',
   },
-  title: {
-    fontSize: 22,
+  headerBadgeText: {
+    color: '#99F6E4',
+    fontSize: 12,
     fontWeight: '700',
-    color: '#0F172A',
-    textAlign: 'center',
+    marginLeft: 6,
   },
-  subtitle: {
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    lineHeight: 36,
+    letterSpacing: 0.2,
+  },
+  cardContainer: {
+    flex: 1.2,
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 36,
+    borderTopRightRadius: 36,
+    paddingHorizontal: 28,
+    paddingTop: 32,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -10 },
+    shadowOpacity: 0.12,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  scrollContent: {
+    paddingBottom: 40,
+  },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  cardTitle: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  signUpText: {
     fontSize: 14,
+    fontWeight: '700',
+    color: '#0F766E',
+  },
+  portalSubLabel: {
+    fontSize: 13,
+    color: '#64748B',
     fontWeight: '600',
-    color: '#0D9488',
-    marginBottom: 24,
-    marginTop: 4,
+    marginBottom: 20,
   },
   errorText: {
     color: '#EF4444',
     fontSize: 13,
-    marginBottom: 12,
+    marginBottom: 14,
+    fontWeight: '600',
+    backgroundColor: '#FEF2F2',
+    padding: 10,
+    borderRadius: 8,
     textAlign: 'center',
-    fontWeight: '500',
   },
-  inputContainer: {
+  successText: {
+    color: '#0D9488',
+    fontSize: 13,
+    marginBottom: 14,
+    fontWeight: '600',
+    backgroundColor: '#F0FDFA',
+    padding: 10,
+    borderRadius: 8,
+    textAlign: 'center',
+  },
+  inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    width: '100%',
-    backgroundColor: '#F1F5F9',
-    borderRadius: 12,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
     marginBottom: 16,
     paddingHorizontal: 14,
     borderWidth: 1,
     borderColor: '#E2E8F0',
+    height: 52,
   },
   inputIcon: {
     marginRight: 10,
   },
   input: {
     flex: 1,
-    height: 48,
+    height: '100%',
     color: '#0F172A',
     fontSize: 14,
+    fontWeight: '500',
+  },
+  forgotPasswordContainer: {
+    alignSelf: 'flex-end',
+    marginBottom: 20,
+    marginTop: -4,
+  },
+  forgotPasswordText: {
+    color: '#0F766E',
+    fontSize: 13,
+    fontWeight: '700',
   },
   loginButton: {
     width: '100%',
-    backgroundColor: '#0D9488',
-    height: 48,
-    borderRadius: 12,
+    backgroundColor: '#0F766E',
+    height: 52,
+    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 8,
     marginBottom: 16,
+    shadowColor: '#0F766E',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
   },
   loginButtonText: {
     color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '800',
   },
   platformNotice: {
     fontSize: 12,
     color: '#64748B',
     textAlign: 'center',
+    fontWeight: '600',
+    marginTop: 6,
   },
 });

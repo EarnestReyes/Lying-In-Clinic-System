@@ -13,7 +13,7 @@ import {
 
 import {
   doc,
-  getDoc,
+  onSnapshot,
 } from "firebase/firestore";
 
 import { auth, db } from "../config/firebase";
@@ -24,6 +24,7 @@ interface AuthContextType {
   firebaseUser: FirebaseUser | null;
   userRole: UserRole | null;
   userName: string | null;
+  userPhotoUrl: string | null;
   loading: boolean;
 }
 
@@ -32,6 +33,7 @@ const AuthContext =
     firebaseUser: null,
     userRole: null,
     userName: null,
+    userPhotoUrl: null,
     loading: true,
   });
 
@@ -51,77 +53,30 @@ export function AuthProvider({
   const [userName, setUserName] =
     useState<string | null>(null);
 
+  const [userPhotoUrl, setUserPhotoUrl] =
+    useState<string | null>(null);
+
   const [loading, setLoading] =
     useState(true);
 
   useEffect(() => {
-    const unsubscribe =
-      onAuthStateChanged(
-        auth,
-        async (user) => {
-          setLoading(true);
-          setUserRole(null);
-          setUserName(null);
-          try {
-            setFirebaseUser(user);
-
-            // No logged-in user
-            if (!user) {
-              setUserRole(null);
-              setUserName(null);
-              setLoading(false);
-              return;
-            }
-
-            // Get user profile from Firestore
-            const userRef = doc(
-              db,
-              "users",
-              user.uid
-            );
-
-            const snapshot =
-              await getDoc(userRef);
-
-            if (snapshot.exists()) {
-              const data =
-                snapshot.data();
-
-              setUserRole(
-                data.role ?? "patient"
-              );
-
-              setUserName(
-                data.fullName ??
-                  user.displayName ??
-                  user.email ??
-                  "User"
-              );
-            } else {
-              // If Firestore profile doesn't exist yet
-              setUserRole("patient");
-
-              setUserName(
-                user.displayName ??
-                  user.email ??
-                  "User"
-              );
-            }
-          } catch (error) {
-            console.error(
-              "Auth state error:",
-              error
-            );
-
-            setUserRole(null);
-            setUserName(null);
-          } finally {
-            setLoading(false);
-          }
-        }
-      );
-
-    return unsubscribe;
+    let stopProfile: (() => void) | undefined;
+    const unsubscribe = onAuthStateChanged(auth, user => {
+      stopProfile?.();
+      setLoading(true); setFirebaseUser(user); setUserRole(null); setUserName(null); setUserPhotoUrl(null);
+      if (!user) { setLoading(false); return; }
+      stopProfile = onSnapshot(doc(db, 'users', user.uid), snapshot => {
+        const data = snapshot.data();
+        setUserRole(data?.role ?? null);
+        setUserName(data?.fullName ?? user.displayName ?? user.email ?? 'User');
+        setUserPhotoUrl(data?.profileImage ?? data?.photoURL ?? user.photoURL ?? null);
+        setLoading(false);
+      }, error => {
+        console.error('Unable to load account profile:', error);
+        setUserRole(null); setUserName(null); setUserPhotoUrl(user.photoURL ?? null); setLoading(false);
+      });
+    });
+    return () => { stopProfile?.(); unsubscribe(); };
   }, []);
 
   return (
@@ -130,6 +85,7 @@ export function AuthProvider({
         firebaseUser,
         userRole,
         userName,
+        userPhotoUrl,
         loading,
       }}
     >

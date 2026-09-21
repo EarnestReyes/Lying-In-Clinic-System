@@ -22,8 +22,9 @@ export function subscribeCarePlan(id: string, update: (plan: CarePlan) => void, 
 }
 export async function saveCarePlan(patientId: string, plan: CarePlan) {
   owner(patientId);
-  if (Object.values(plan).some(value => value.length > 2000)) throw new Error('Keep each field under 2,000 characters.');
-  await setDoc(doc(db, 'care', patientId, 'details', 'plan'), { ...plan, updatedAt: serverTimestamp() });
+  const fields = { companion: plan.companion, emergencyContact: plan.emergencyContact, transport: plan.transport, preferences: plan.preferences };
+  if (Object.values(fields).some(value => typeof value !== 'string' || value.length > 2000)) throw new Error('Keep each field under 2,000 characters.');
+  await setDoc(doc(db, 'care', patientId, 'details', 'plan'), { ...fields, updatedAt: serverTimestamp() });
 }
 export async function setTaskDone(patientId: string, task: CareTask) {
   owner(patientId);
@@ -37,8 +38,13 @@ export async function addCareTask(patientId: string, label: string, isStaff: boo
 }
 export async function reviewCareTask(patientId: string, task: CareTask, review: CareTask['review']) {
   const uid = await staff();
-  const { id, label, category, done } = task;
-  await setDoc(doc(db, 'care', patientId, 'tasks', id), { label, category, done, review, reviewedBy: uid, updatedAt: serverTimestamp() });
+  const ref = doc(db, 'care', patientId, 'tasks', task.id);
+  await runTransaction(db, async transaction => {
+    const snapshot = await transaction.get(ref);
+    const current = snapshot.exists() ? snapshot.data() as CareTask : task;
+    if (current.done !== task.done) throw new Error('The patient changed this item. Review the updated checklist first.');
+    transaction.set(ref, { label: current.label, category: current.category, done: current.done, review, reviewedBy: uid, updatedAt: serverTimestamp() });
+  });
 }
 export async function addCareQuestion(patientId: string, text: string) {
   owner(patientId);
@@ -76,16 +82,18 @@ export async function saveRecapDraft(patientId: string, recap: Omit<CareRecap, '
   return ref.id;
 }
 export function validateRecap(recap: Omit<CareRecap, 'id'>) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(recap.visitDate) || new Date(`${recap.visitDate}T00:00:00Z`).toISOString().slice(0, 10) !== recap.visitDate) throw new Error('Enter a valid visit date as YYYY-MM-DD.');
+  const date = new Date(`${recap.visitDate}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(recap.visitDate) || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== recap.visitDate) throw new Error('Enter a valid visit date as YYYY-MM-DD.');
   if (!recap.summary.trim() || recap.summary.length > 4000 || recap.instructions.length > 4000 || recap.nextVisit.length > 300) throw new Error('Add a summary and keep summary/instructions under 4,000 characters.');
 }
-export async function publishRecap(patientId: string, id: string) {
+export async function publishRecap(patientId: string, id: string, reviewed: CareRecap) {
   const uid = await staff();
   await runTransaction(db, async transaction => {
     const draftRef = doc(db, 'care', patientId, 'draftRecaps', id);
     const snapshot = await transaction.get(draftRef);
     if (!snapshot.exists()) throw new Error('Save the draft before approving it.');
     const { visitDate, summary, instructions, nextVisit } = snapshot.data();
+    if (JSON.stringify([visitDate, summary, instructions, nextVisit]) !== JSON.stringify([reviewed.visitDate, reviewed.summary, reviewed.instructions, reviewed.nextVisit])) throw new Error('The draft changed. Review the latest text before approving.');
     validateRecap({ visitDate, summary, instructions, nextVisit });
     transaction.set(doc(db, 'care', patientId, 'recaps', id), { visitDate, summary, instructions, nextVisit, approvedBy: uid, approvedAt: serverTimestamp() });
   });

@@ -1,7 +1,8 @@
 import { db } from '../../src/config/firebase'; // Adjust path to your firebase config if needed
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
 
 export interface PatientProfile {
+  profileImage?: string;
   name?: string;
   email?: string;
   phone?: string;
@@ -31,7 +32,7 @@ export const fetchPatientProfile = async (patientUid: string): Promise<PatientPr
 export const updatePatientProfile = async (patientUid: string, updatedData: Partial<PatientProfile>) => {
   try {
     const docRef = doc(db, "patients", patientUid);
-    await updateDoc(docRef, updatedData);
+    await updateDoc(docRef, { ...updatedData, updatedAt: serverTimestamp() });
   } catch (error) {
     console.error("Error updating patient profile: ", error);
     throw error;

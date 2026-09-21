@@ -1,0 +1,95 @@
+// Merge inside match /databases/{database}/documents. This is not a replacement ruleset.
+function careSignedIn() { return request.auth != null; }
+function careOwner(patientId) { return careSignedIn() && request.auth.uid == patientId; }
+function careStaff() {
+  return careSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'staff', 'midwife'];
+}
+function careText(value, max) { return value is string && value.size() <= max; }
+function careTaskValid() {
+  let d = request.resource.data;
+  return d.keys().hasOnly(['label', 'category', 'done', 'review', 'reviewedBy', 'updatedAt']) &&
+    careText(d.label, 200) && d.label.size() > 0 && careText(d.category, 100) && d.done is bool &&
+    d.review in ['Pending', 'Reviewed', 'Needs attention'] && d.updatedAt == request.time;
+}
+match /care/{patientId}/tasks/{id} {
+  allow read: if careOwner(patientId) || careStaff();
+  allow create: if careTaskValid() && ((careOwner(patientId) && request.resource.data.review == 'Pending' && request.resource.data.reviewedBy == '') ||
+    (careStaff() && request.resource.data.reviewedBy in ['', request.auth.uid]));
+  allow update: if careTaskValid() && ((careOwner(patientId) && request.resource.data.review == 'Pending' && request.resource.data.reviewedBy == '' &&
+    request.resource.data.label == resource.data.label && request.resource.data.category == resource.data.category) ||
+    (careStaff() && request.resource.data.reviewedBy == request.auth.uid));
+  allow delete: if false;
+}
+match /care/{patientId}/details/plan {
+  allow read: if careOwner(patientId) || careStaff();
+  allow create, update: if careOwner(patientId) && request.resource.data.keys().hasOnly(['companion', 'emergencyContact', 'transport', 'preferences', 'updatedAt']) &&
+    careText(request.resource.data.companion, 2000) && careText(request.resource.data.emergencyContact, 2000) &&
+    careText(request.resource.data.transport, 2000) && careText(request.resource.data.preferences, 2000) && request.resource.data.updatedAt == request.time;
+}
+match /care/{patientId}/privateQuestions/{id} {
+  allow read, delete: if careOwner(patientId);
+  allow create: if careOwner(patientId) && request.resource.data.keys().hasOnly(['text', 'updatedAt']) &&
+    careText(request.resource.data.text, 1500) && request.resource.data.text.size() > 0 && request.resource.data.updatedAt == request.time;
+}
+match /care/{patientId}/sharedQuestions/{id} {
+  allow read: if careOwner(patientId) || careStaff();
+  allow create: if careOwner(patientId) && request.resource.data.keys().hasOnly(['text', 'answer', 'status', 'updatedAt']) &&
+    request.resource.data.text == get(/databases/$(database)/documents/care/$(patientId)/privateQuestions/$(id)).data.text &&
+    request.resource.data.answer == '' && request.resource.data.status == 'Shared' && request.resource.data.updatedAt == request.time;
+  allow update: if careStaff() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answer', 'status', 'answeredBy', 'updatedAt']) &&
+    careText(request.resource.data.answer, 3000) && request.resource.data.answer.size() > 0 && request.resource.data.status == 'Answered' &&
+    request.resource.data.answeredBy == request.auth.uid && request.resource.data.updatedAt == request.time;
+  allow delete: if careOwner(patientId);
+}
+function careRecapValid() {
+  let d = request.resource.data;
+  return careText(d.visitDate, 10) && d.visitDate.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}') &&
+    careText(d.summary, 4000) && d.summary.size() > 0 && careText(d.instructions, 4000) && careText(d.nextVisit, 300);
+}
+match /care/{patientId}/draftRecaps/{id} {
+  allow read: if careStaff();
+  allow create, update: if careStaff() && careRecapValid() &&
+    request.resource.data.keys().hasOnly(['visitDate', 'summary', 'instructions', 'nextVisit', 'updatedBy', 'updatedAt']) &&
+    request.resource.data.updatedBy == request.auth.uid && request.resource.data.updatedAt == request.time;
+}
+match /care/{patientId}/recaps/{id} {
+  allow read: if careOwner(patientId) || careStaff();
+  allow create, update: if careStaff() && careRecapValid() &&
+    request.resource.data.keys().hasOnly(['visitDate', 'summary', 'instructions', 'nextVisit', 'approvedBy', 'approvedAt']) &&
+    request.resource.data.approvedBy == request.auth.uid && request.resource.data.approvedAt == request.time;
+  allow delete: if careStaff();
+}
+function careShareValid() {
+  let d = request.resource.data;
+  return d.keys().hasOnly(['patientId', 'companionId', 'patientName', 'preparation', 'reminders', 'updatedAt']) &&
+    d.patientId == request.auth.uid && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'patient' &&
+    d.companionId != d.patientId && get(/databases/$(database)/documents/users/$(d.companionId)).data.role == 'companion' &&
+    careText(d.patientName, 200) && d.preparation is list && d.reminders is list &&
+    d.preparation.size() <= 100 && d.reminders.size() <= 100 && d.preparation.size() + d.reminders.size() > 0 && d.updatedAt == request.time;
+}
+match /careCompanions/{id} {
+  allow read: if careSignedIn() && (resource.data.patientId == request.auth.uid || resource.data.companionId == request.auth.uid);
+  allow create: if careSignedIn() && careShareValid();
+  allow update: if careSignedIn() && resource.data.patientId == request.auth.uid &&
+    request.resource.data.companionId == resource.data.companionId && careShareValid();
+  allow delete: if careSignedIn() && resource.data.patientId == request.auth.uid;
+}
+// Add these grants to the existing users match. Preserve the existing patient registration rules.
+match /users/{uid} {
+  allow get: if careOwner(uid);
+  allow create: if careOwner(uid) && request.resource.data.keys().hasOnly(['email', 'fullName', 'role', 'createdAt']) &&
+    request.resource.data.role == 'companion' && request.resource.data.email == request.auth.token.email &&
+    careText(request.resource.data.fullName, 120) && request.resource.data.fullName.size() > 0 && request.resource.data.createdAt == request.time;
+}
+// Patient clinical records: parent-document ownership and registered uid aliases are supported.
+function careRecordOwner(patientId) {
+  return careOwner(patientId) || (careSignedIn() && get(/databases/$(database)/documents/patients/$(patientId)).data.get('uid', '') == request.auth.uid);
+}
+match /patients/{patientId}/prenatalVisits/{id} {
+  allow read: if careRecordOwner(patientId) || careStaff();
+  allow create, update: if careStaff();
+}
+match /patients/{patientId}/medicalHistory/{id} {
+  allow read: if careRecordOwner(patientId) || careStaff();
+  allow create, update: if careStaff();
+}

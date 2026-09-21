@@ -18,9 +18,9 @@ export const fetchInventoryItems = async () => {
   }
 };
 
-export const addInventoryItem = async (itemData: any) => {
+export const addInventoryItem = async (itemData: Omit<InventoryItem, 'id' | 'status' | 'statusColor' | 'createdAt' | 'updatedAt'>) => {
   try {
-    const docRef = await addDoc(inventoryCollection, itemData);
+    const docRef = await addDoc(inventoryCollection, { ...itemData, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
     return docRef.id;
   } catch (error) {
     console.error("Error adding inventory item: ", error);

@@ -1,0 +1,55 @@
+// Merge inside match /databases/{database}/documents; audit existing overlapping allows.
+function mobileOwner(uid) { return request.auth != null && request.auth.uid == uid; }
+function mobileStaff() { return request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'staff', 'midwife']; }
+match /care/{uid}/documents/{id} {
+  allow read: if mobileOwner(uid) || mobileStaff();
+  allow create: if mobileOwner(uid)
+    && request.resource.data.keys().hasOnly(['patientId', 'patientName', 'title', 'category', 'description', 'fileName', 'fileType', 'fileUrl', 'storagePath', 'status', 'submittedAt', 'reviewedAt', 'reviewedBy', 'reviewerName', 'rejectionReason'])
+    && request.resource.data.patientId == uid
+    && request.resource.data.patientName is string && request.resource.data.patientName.size() <= 200
+    && request.resource.data.title is string && request.resource.data.title.size() > 0 && request.resource.data.title.size() <= 160
+    && request.resource.data.category in ['Medical Certificate', 'Laboratory Result', 'Ultrasound Result', 'PhilHealth Document', 'Valid ID', 'Referral', 'Prescription', 'Other']
+    && request.resource.data.description is string && request.resource.data.description.size() <= 1000
+    && request.resource.data.fileName is string && request.resource.data.fileName.size() > 0 && request.resource.data.fileName.size() <= 500
+    && request.resource.data.fileType in ['application/pdf', 'image/jpeg', 'image/png']
+    && request.resource.data.fileUrl is string && request.resource.data.fileUrl.matches('https://firebasestorage.googleapis.com/.*')
+    && request.resource.data.storagePath.matches('patients/' + uid + '/documents/' + id + '/[^/]+')
+    && request.resource.data.submittedAt == request.time
+    && request.resource.data.status == 'pending'
+    && request.resource.data.reviewedBy == null && request.resource.data.reviewerName == null
+    && request.resource.data.reviewedAt == null && request.resource.data.rejectionReason == '';
+  allow update: if mobileStaff()
+    && resource.data.get('status', resource.data.get('reviewStatus', 'pending')) == 'pending'
+    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedBy', 'reviewedAt', 'reviewerName', 'rejectionReason'])
+    && request.resource.data.status in ['approved', 'rejected']
+    && request.resource.data.reviewedBy == request.auth.uid && request.resource.data.reviewedAt == request.time
+    && request.resource.data.reviewerName is string && request.resource.data.reviewerName.size() > 0 && request.resource.data.reviewerName.size() <= 200
+    && request.resource.data.rejectionReason is string && request.resource.data.rejectionReason.size() <= 1000
+    && ((request.resource.data.status == 'approved' && request.resource.data.rejectionReason == '')
+      || (request.resource.data.status == 'rejected' && request.resource.data.rejectionReason.size() > 0));
+  allow delete: if false;
+}
+match /patients/{uid} {
+  allow read: if mobileOwner(uid) || mobileStaff();
+  allow update: if mobileOwner(uid)
+    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'contactNumber', 'phone', 'profileImage', 'updatedAt'])
+    && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 150
+    && request.resource.data.contactNumber is string && request.resource.data.contactNumber.size() <= 30
+    && request.resource.data.phone is string && request.resource.data.phone.size() <= 30
+    && request.resource.data.updatedAt == request.time;
+  match /prenatalVisits/{id} { allow read: if mobileOwner(uid) || mobileStaff(); }
+  match /medicalHistory/{id} { allow read: if mobileOwner(uid) || mobileStaff(); }
+}
+match /appointments/{id} {
+  allow read: if request.auth != null && (resource.data.get('patientId', '') == request.auth.uid || resource.data.get('patientUid', '') == request.auth.uid);
+  allow update: if request.auth != null
+    && (resource.data.get('patientId', '') == request.auth.uid || resource.data.get('patientUid', '') == request.auth.uid)
+    && request.resource.data.updatedAt == request.time
+    && ((resource.data.status in ['pending', 'Scheduled'] && request.resource.data.status == 'confirmed'
+      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'confirmedAt', 'confirmedBy'])
+      && request.resource.data.confirmedAt == request.time && request.resource.data.confirmedBy == request.auth.uid)
+    || (resource.data.status in ['pending', 'Scheduled', 'confirmed'] && request.resource.data.status == 'cancelled'
+      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'cancelledAt', 'cancelledBy', 'cancellationReason'])
+      && request.resource.data.cancelledAt == request.time && request.resource.data.cancelledBy == request.auth.uid
+      && request.resource.data.cancellationReason is string && request.resource.data.cancellationReason.size() <= 500));
+}

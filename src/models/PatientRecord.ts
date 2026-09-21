@@ -3,6 +3,9 @@ export interface PrenatalVisit {
   visitNo: string;
   date: string;
   bp: string;
+  bloodPressure?: string;
+  systolic?: number;
+  diastolic?: number;
   weight: string;
   heightCm?: number | null;
   bmi?: number | null;
@@ -19,4 +22,3 @@ export interface MedicalHistoryEntry {
   notes: string;
   createdAt?: any;
 }
-

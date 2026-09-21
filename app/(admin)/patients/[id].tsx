@@ -19,8 +19,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { administerMedication } from '../../../src/services/medicationService';
 import { sendReminderToPatient } from '../../../src/(patient)/remindersService';
 import { auth } from '../../../src/config/firebase';
-import { addMedicalHistoryEntry, addPrenatalVisit, getAvailableMedicationInventory, updatePatientRecord } from '../../../src/services/patientRecordService';
-import { fetchPatientById } from '../../../src/services/patientService';
+import { addMedicalHistoryEntry, addPrenatalVisit, getAvailableMedicationInventory, updatePatientRecord, subscribePatientClinicalRecord } from '../../../src/services/patientRecordService';
 
 export default function PatientDetailScreen() {
   const router = useRouter();
@@ -29,6 +28,9 @@ export default function PatientDetailScreen() {
   
   const [loading, setLoading] = useState(true);
   const [patient, setPatient] = useState<any>(null);
+  const [recordError, setRecordError] = useState('');
+  const [reload, setReload] = useState(0);
+  const patientId = Array.isArray(id) ? id[0] : id;
 
   // --- PROFILE EDIT MODAL STATES ---
   const [isEditProfileVisible, setIsEditProfileVisible] = useState(false);
@@ -77,14 +79,15 @@ export default function PatientDetailScreen() {
   const [historyNotes, setHistoryNotes] = useState('');
 
   const openEditProfile = () => {
+    const editable = (value: any) => value == null || ['N/A', 'Not recorded'].includes(String(value)) ? '' : String(value);
     setEditName(patient?.fullName || '');
-    setEditAge(patient?.age != null && patient.age !== 'N/A' ? String(patient.age) : '');
-    setEditContactNumber(patient?.contactNumber === 'N/A' ? '' : patient?.contactNumber || '');
-    setEditBloodType(patient?.bloodType === 'N/A' ? '' : patient?.bloodType || '');
-    setEditGravidaPara(`G${patient?.gravida ?? 1} P${patient?.para ?? 0}`);
-    setEditPregnancyWeek((patient?.gestationalAge || '').replace(/\s*weeks?\s*/i, ''));
-    setEditEdd(patient?.expectedDueDate === 'N/A' ? '' : patient?.expectedDueDate || '');
-    setEditAddress(patient?.address === 'N/A' ? '' : patient?.address || '');
+    setEditAge(editable(patient?.age));
+    setEditContactNumber(editable(patient?.contactNumber));
+    setEditBloodType(editable(patient?.bloodType));
+    setEditGravidaPara(patient?.gravidaPara || '');
+    setEditPregnancyWeek(editable(patient?.pregnancyWeek));
+    setEditEdd(editable(patient?.expectedDueDate));
+    setEditAddress(editable(patient?.address));
     setIsEditProfileVisible(true);
   };
 
@@ -206,7 +209,7 @@ export default function PatientDetailScreen() {
     setWeight('');
     setHeightCm(patient?.heightCm ? String(patient.heightCm) : '');
     setFhb('');
-    setGestationalAgeInput(patient?.gestationalAge || '');
+    setGestationalAgeInput(patient?.pregnancyWeek != null ? String(patient.pregnancyWeek) : '');
     setStaffNotes('');
     setIsCheckupModalVisible(true);
   };
@@ -242,17 +245,16 @@ export default function PatientDetailScreen() {
         notes: staffNotes || 'Routine checkup completed.',
       };
 
+      if (!targetId || !Number.isFinite(numericWeight) || numericWeight <= 0) throw new Error('A patient and positive weight are required.');
       await addPrenatalVisit(targetId, newVisitData, {
         weight,
+        bloodPressure: bp,
+        bp,
+        fhb,
+        ...(Number.isFinite(parseFloat(gestationalAgeInput)) ? { pregnancyWeek: parseFloat(gestationalAgeInput) } : {}),
         ...(numericHeight > 0 ? { heightCm: numericHeight } : {}),
       });
 
-      setPatient((prev: any) => ({
-        ...prev,
-        gestationalAge: gestationalAgeInput || prev.gestationalAge,
-        heightCm: numericHeight || prev.heightCm,
-        prenatalVisits: [newVisitData, ...(prev.prenatalVisits || [])]
-      }));
 
       Alert.alert('Success', 'New checkup visit recorded successfully!');
       setIsCheckupModalVisible(false);
@@ -284,10 +286,6 @@ export default function PatientDetailScreen() {
 
       await addMedicalHistoryEntry(targetId, newHistoryData);
 
-      setPatient((prev: any) => ({
-        ...prev,
-        medicalHistory: [newHistoryData, ...(prev.medicalHistory || [])]
-      }));
 
       Alert.alert('Success', 'Medical history entry added successfully!');
       setIsHistoryModalVisible(false);
@@ -300,81 +298,31 @@ export default function PatientDetailScreen() {
   };
 
   useEffect(() => {
-    const loadPatientDetails = async () => {
-      if (!id) return;
-      try {
-        setLoading(true);
-        const targetId = Array.isArray(id) ? id[0] : id;
+    setLoading(true); setRecordError(''); setPatient(null);
+    if (!patientId) { setRecordError('No patient was selected.'); setLoading(false); return; }
+    return subscribePatientClinicalRecord(patientId, data => {
+      if (!data) { setPatient(null); setLoading(false); return; }
+      const matches = String(data.gravidaPara || '').match(/G(\d+)\s*P(\d+)/i);
+      setPatient({
+        ...data,
+        fullName: data.name || data.fullName || 'Unknown Patient',
+        age: data.age ?? 'Not recorded', dob: data.dob || data.birthDate || 'Not recorded',
+        bloodType: data.bloodType || 'Not recorded', contactNumber: data.contactNumber || data.email || 'Not recorded',
+        address: data.address || 'Not recorded', status: data.status || 'Not recorded', statusColor: data.flagColor || '#64748B',
+        gravida: matches ? Number(matches[1]) : '?', para: matches ? Number(matches[2]) : '?',
+        gestationalAge: data.pregnancyWeek != null ? data.pregnancyWeek + ' weeks' : 'Not recorded',
+        expectedDueDate: data.edd || 'Not recorded', assignedMidwife: data.assignedMidwife || 'Not recorded',
+        financialRecords: data.financialRecords || [],
+      });
+      setLoading(false);
+    }, error => { setRecordError(error.message); setLoading(false); });
+  }, [patientId, reload]);
 
-        const record = await fetchPatientById(targetId);
-
-        if (record) {
-          const data = record;
-          
-          let gravidaVal = 1;
-          let paraVal = 0;
-          if (data.gravidaPara) {
-            const matches = data.gravidaPara.match(/G(\d+)\s*P(\d+)/i);
-            if (matches) {
-              gravidaVal = parseInt(matches[1], 10);
-              paraVal = parseInt(matches[2], 10);
-            }
-          }
-
-          setPatient({
-            id: data.uid || targetId,
-            fullName: data.name || data.fullName || 'Unknown Patient',
-            age: data.age || 21,
-            dob: data.dob || 'January 1, 2000',
-            bloodType: data.bloodType || 'O+',
-            contactNumber: data.contactNumber || data.email || 'N/A',
-            address: data.address || 'Imus, Cavite',
-            status: data.status || 'Routine',
-            statusColor: data.flagColor || '#10B981',
-            gravida: gravidaVal,
-            para: paraVal,
-            gestationalAge: data.pregnancyWeek ? `${data.pregnancyWeek} weeks` : '25 weeks',
-            expectedDueDate: data.edd || 'October 25, 2026',
-            assignedMidwife: data.assignedMidwife || 'Midwife Staff',
-            
-            medicalHistory: data.medicalHistory || [
-              { date: data.lastVisit || 'Sept 17, 2026', title: 'Intake / Initial Assessment', notes: 'Patient registered into lying-in system.' }
-            ],
-            prenatalVisits: data.prenatalVisits || [
-              { visitNo: 'Visit #1', date: data.lastVisit || data.date, bp: data.bp, weight: data.weight, fhb: data.fhb, notes: data.notes }
-            ],
-            financialRecords: data.financialRecords || []
-          });
-        } else {
-          setPatient({
-            id: targetId,
-            fullName: 'N/A',
-            age: 'N/A',
-            dob: 'N/A',
-            bloodType: 'N/A',
-            contactNumber: 'N/A',
-            address: 'N/A',
-            status: 'N/A',
-            statusColor: '#F59E0B',
-            gravida: 1,
-            para: 0,
-            gestationalAge: 'N/A',
-            expectedDueDate: 'N/A',
-            assignedMidwife: 'N/A',
-            medicalHistory: [{ date: 'N/A', title: 'N/A', notes: 'N/A' }],
-            prenatalVisits: [{ visitNo: 'N/A', date: 'N/A', bp: 'N/A', weight: 'N/A', fhb: 'N/A', notes: 'N/A' }],
-            financialRecords: []
-          });
-        }
-      } catch (error) {
-        console.error('Error loading patient details from Firestore:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadPatientDetails();
-  }, [id]);
+  if (recordError || (!loading && !patient)) return <View style={{ padding: 28, gap: 16 }}>
+    <Text style={{ color: '#DC2626' }}>{recordError || 'Patient record not found.'}</Text>
+    <TouchableOpacity onPress={() => setReload(value => value + 1)}><Text style={{ color: '#0D9488' }}>Retry loading records</Text></TouchableOpacity>
+    <TouchableOpacity onPress={() => router.replace('/(admin)/patients' as any)}><Text>Back to patients</Text></TouchableOpacity>
+  </View>;
 
   if (loading) {
     return (
@@ -515,8 +463,9 @@ export default function PatientDetailScreen() {
                   </TouchableOpacity>
                 </View>
 
+                {!patient?.medicalHistory?.length && <Text style={styles.historyNotes}>No medical history has been recorded yet.</Text>}
                 {patient?.medicalHistory?.map((item: any, index: number) => (
-                  <View key={index} style={styles.historyCard}>
+                  <View key={item.id || index} style={styles.historyCard}>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                       <Text style={styles.historyTitle}>{item.title}</Text>
                       <Text style={styles.historyDate}>{item.date}</Text>
@@ -531,6 +480,7 @@ export default function PatientDetailScreen() {
               <View style={styles.sectionContainer}>
                 <View style={styles.sectionHeaderRow}>
                   <Text style={styles.sectionTitle}>Prenatal Consultation Logs</Text>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
                   <TouchableOpacity style={styles.secondaryButton} onPress={handleOpenCheckupModal} activeOpacity={0.8}>
                     <Ionicons name="add" size={14} color="#0D9488" style={{ marginRight: 4 }} />
                     <Text style={styles.secondaryButtonText}>New Checkup Visit</Text>
@@ -539,10 +489,12 @@ export default function PatientDetailScreen() {
                     <Ionicons name="medkit-outline" size={14} color="#0D9488" style={{ marginRight: 4 }} />
                     <Text style={styles.secondaryButtonText}>Administer Medication</Text>
                   </TouchableOpacity>
+                  </View>
                 </View>
 
+                {!patient?.prenatalVisits?.length && <Text style={styles.visitNotes}>No prenatal checkups have been recorded yet.</Text>}
                 {patient?.prenatalVisits?.map((visit: any, index: number) => (
-                  <View key={index} style={styles.visitCard}>
+                  <View key={visit.id || index} style={styles.visitCard}>
                     <View style={styles.visitCardHeader}>
                       <Text style={styles.visitName}>{visit.visitNo || `Visit #${index + 1}`}</Text>
                       <Text style={styles.visitDate}>{visit.date}</Text>
@@ -551,7 +503,7 @@ export default function PatientDetailScreen() {
                     <View style={styles.vitalsRow}>
                       <View style={styles.vitalBadge}>
                         <Text style={styles.vitalLabel}>BP:</Text>
-                        <Text style={styles.vitalVal}>{visit.bp || '120/80'}</Text>
+                        <Text style={styles.vitalVal}>{visit.bp || 'Not recorded'}</Text>
                       </View>
                       <View style={styles.vitalBadge}>
                         <Text style={styles.vitalLabel}>Weight:</Text>
@@ -957,7 +909,7 @@ const styles = StyleSheet.create({
   tabButtonText: { fontSize: 13, fontWeight: '600', color: '#64748B' },
   tabButtonTextActive: { color: '#FFFFFF' },
   sectionContainer: { gap: 12 },
-  sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  sectionHeaderRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   sectionTitle: { fontSize: 16, fontWeight: '800', color: '#0F172A' },
   secondaryButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#CCFBF1', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
   secondaryButtonText: { fontSize: 12, fontWeight: '700', color: '#0D9488' },

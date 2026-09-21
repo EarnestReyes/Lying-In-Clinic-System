@@ -8,12 +8,15 @@ export type InventoryCategory =
 
 export type StockStatus = "In Stock" | "Low Stock";
 
+export const INVENTORY_UNIT_TYPES = ['Piece', 'Box', 'Pack', 'Bottle', 'Vial', 'Tablet', 'Capsule', 'Roll', 'Pair', 'Set', 'Other'] as const;
+
 export interface InventoryItem {
   id: string;
   itemName: string;
   category: InventoryCategory;
   stock: number;
   unit: string;           // e.g., "tablets", "vials", "boxes", "pairs"
+  supplier?: string;
   minThreshold: number;   // Minimum stock level before triggering "Low Stock"
   status?: StockStatus;   // Evaluated dynamically or stored
   statusColor?: string;   // UI hex color for badges

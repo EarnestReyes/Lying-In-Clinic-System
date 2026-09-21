@@ -1,0 +1,19 @@
+// Merge inside match /databases/{database}/documents.
+// Firebase rules OR matching allow statements, so audit any broader users update grants.
+match /users/{uid} {
+  allow update: if request.auth != null
+    && request.auth.uid == uid
+    && resource.data.role == 'patient'
+    && request.resource.data.role == resource.data.role
+    && request.resource.data.diff(resource.data).affectedKeys()
+      .hasOnly(['permissionsOnboardingCompleted', 'permissionsOnboardingCompletedAt'])
+    && request.resource.data.permissionsOnboardingCompleted is bool
+    && (
+      (request.resource.data.permissionsOnboardingCompleted == true
+        && request.resource.data.permissionsOnboardingCompletedAt is string
+        && request.resource.data.permissionsOnboardingCompletedAt.size() <= 40)
+      ||
+      (request.resource.data.permissionsOnboardingCompleted == false
+        && !request.resource.data.keys().hasAny(['permissionsOnboardingCompletedAt']))
+    );
+}

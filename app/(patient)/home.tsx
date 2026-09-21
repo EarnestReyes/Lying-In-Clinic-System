@@ -1,30 +1,55 @@
+import { ClinicalPatient } from '../../src/hooks/usePatientClinicalRecord';
+import { Reminder } from '../../src/models/reminder';
 import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
   View,
-  SafeAreaView,
+  Alert,
   StatusBar,
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
   Image,
+  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { subscribePatientData } from '../../src/(patient)/patientService';
+import { subscribePatientClinicalRecord } from '../../src/services/patientRecordService';
+import { clinicalNotices } from '../../src/utils/clinicalRecords';
+
 import { auth } from '../../src/config/firebase';
+import { authService } from '../../src/services/authService';
 import { subscribeRemindersForPatient } from '../../src/(patient)/remindersService';
 
-type BPFilter = 'day' | 'week' | 'month';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { BloodPressureChart } from '../../components/BloodPressureChart';
 
 export default function PatientHomeScreen() {
   const router = useRouter();
   
-  const [patientData, setPatientData] = useState<any>(null);
+  const [patientData, setPatientData] = useState<ClinicalPatient | null>(null);
   const [loading, setLoading] = useState(true);
-  const [clinicNotices, setClinicNotices] = useState<any[]>([]);
-  const [bpFilter, setBpFilter] = useState<BPFilter>('week');
+  const [clinicNoticesState, setClinicNoticesState] = useState<Reminder[]>([]);
+  const [recordError, setRecordError] = useState('');
+  
+  // State to manage whether all clinic notices are expanded inline or via modal
+  const [showAllNoticesInline, setShowAllNoticesInline] = useState(false);
+  const [showAllNoticesModal, setShowAllNoticesModal] = useState(false);
+
+  // State to manage Blood Pressure history list collapse/expansion & modal view
+  const [showAllBpModal, setShowAllBpModal] = useState(false);
+  const [showAllBpInline, setShowAllBpInline] = useState(false);
+
+  const combinedClinicNotices = [...clinicNoticesState, ...clinicalNotices(patientData)].sort((a, b) => (b.createdAt?.toMillis?.() || Date.parse(b.date) || 0) - (a.createdAt?.toMillis?.() || Date.parse(a.date) || 0));
+
+  // Determine which notices to display based on the toggle state (show max 3 when collapsed)
+  const displayedNotices = showAllNoticesInline ? combinedClinicNotices : combinedClinicNotices.slice(0, 3);
+
+  // Sort visits chronologically or reverse-chronologically for BP history
+  const prenatalVisits = patientData?.prenatalVisits || [];
+  const sortedVisits = [...prenatalVisits].reverse();
+  const displayedVisits = showAllBpInline ? sortedVisits : sortedVisits.slice(0, 3);
 
   const patientUid = auth.currentUser?.uid;
 
@@ -33,55 +58,23 @@ export default function PatientHomeScreen() {
       setLoading(false);
       return;
     }
-    const unsubscribe = subscribePatientData(patientUid, (data) => {
-      if (data) {
-        setPatientData(data);
-      }
+    const unsubscribe = subscribePatientClinicalRecord(patientUid, (data) => {
+      setPatientData(data);
+      setRecordError('');
       setLoading(false);
-    });
+    }, () => { setRecordError('Clinic records could not be loaded. Please check your connection or contact the clinic.'); setLoading(false); });
 
     return () => unsubscribe();
   }, [patientUid]);
 
   useEffect(() => {
     if (!patientUid) return;
-    return subscribeRemindersForPatient(patientUid, (reminders) => setClinicNotices(reminders.filter((item) => !item.completed)), console.error);
+    return subscribeRemindersForPatient(patientUid, (reminders) => setClinicNoticesState(reminders.filter((item) => !item.completed)), console.error);
   }, [patientUid]);
 
   // Calculate percentage out of 40 standard pregnancy weeks
-  const currentWeeks = patientData?.pregnancyWeek || 0;
-  const progressPercent = Math.min(Math.round((currentWeeks / 40) * 100), 100);
-
-  // Blood pressure dataset based on selected filter
-  const getBpDataPoints = () => {
-    if (bpFilter === 'day') {
-      return [
-        { label: '8 AM', systolic: 120, diastolic: 80 },
-        { label: '12 PM', systolic: 118, diastolic: 78 },
-        { label: '4 PM', systolic: 122, diastolic: 82 },
-        { label: '8 PM', systolic: 119, diastolic: 79 },
-      ];
-    }
-    if (bpFilter === 'week') {
-      return [
-        { label: 'Mon', systolic: 120, diastolic: 80 },
-        { label: 'Tue', systolic: 118, diastolic: 76 },
-        { label: 'Wed', systolic: 124, diastolic: 82 },
-        { label: 'Thu', systolic: 121, diastolic: 79 },
-        { label: 'Fri', systolic: 119, diastolic: 78 },
-        { label: 'Sat', systolic: 117, diastolic: 75 },
-        { label: 'Sun', systolic: 120, diastolic: 80 },
-      ];
-    }
-    return [
-      { label: 'Wk 1', systolic: 118, diastolic: 78 },
-      { label: 'Wk 2', systolic: 120, diastolic: 80 },
-      { label: 'Wk 3', systolic: 122, diastolic: 81 },
-      { label: 'Wk 4', systolic: 119, diastolic: 79 },
-    ];
-  };
-
-  const bpPoints = getBpDataPoints();
+  const currentWeeks = Number(patientData?.pregnancyWeek) || 0;
+  const progressPercent = Math.max(0, Math.min(Math.round((currentWeeks / 40) * 100), 100));
 
   return (
     <SafeAreaView style={styles.container}>
@@ -111,7 +104,6 @@ export default function PatientHomeScreen() {
         </View>
 
         <View style={styles.headerActions}>
-          {/* Profile Shortcut Button */}
           <TouchableOpacity 
             style={styles.headerIconButton} 
             onPress={() => router.push('/(patient)/profile' as any)}
@@ -120,10 +112,9 @@ export default function PatientHomeScreen() {
             <Ionicons name="person-outline" size={18} color="#0D9488" />
           </TouchableOpacity>
 
-          {/* Logout Button */}
           <TouchableOpacity 
             style={[styles.headerIconButton, styles.logoutButtonOverride]} 
-            onPress={() => router.replace('/(auth)/login' as any)}
+            onPress={() => Alert.alert('Log out?', 'You can sign in again anytime.', [{ text: 'Stay', style: 'cancel' }, { text: 'Log out', onPress: async () => { try { await authService.logout(); router.replace('/(auth)/login'); } catch { setRecordError('Unable to sign out. Please try again.'); } } }])}
             activeOpacity={0.8}
           >
             <Ionicons name="log-out-outline" size={18} color="#EF4444" />
@@ -149,7 +140,7 @@ export default function PatientHomeScreen() {
                     <Ionicons name="heart" size={12} color="#FFFFFF" />
                   </View>
                   <Text style={styles.bannerBadgeText}>
-                    {patientData?.pregnancyWeek || 0} Weeks Pregnant • {patientData?.gravidaPara || 'Prenatal'}
+                    {patientData?.pregnancyWeek ? `${patientData.pregnancyWeek} Weeks Pregnant` : 'Gestational age not recorded'} • {patientData?.gravidaPara || 'Prenatal'}
                   </Text>
                 </View>
                 
@@ -157,7 +148,7 @@ export default function PatientHomeScreen() {
                   Due Date: {patientData?.edd || 'Not Set'}
                 </Text>
                 <Text style={styles.bannerSubtitle}>
-                  Last Clinic Visit: {patientData?.lastVisit || 'Recent'} 
+                  Last Clinic Visit: {patientData?.lastVisit || 'Not recorded'}
                 </Text>
                 
                 <View style={styles.progressBarWrapper}>
@@ -174,68 +165,55 @@ export default function PatientHomeScreen() {
               </View>
             </View>
 
-            {/* Blood Pressure Monitoring Card */}
-            <View style={styles.card}>
-              <View style={styles.cardHeaderRow}>
-                <View style={styles.cardTitleBox}>
-                  <View style={styles.cardIconBox}>
-                    <Ionicons name="pulse" size={18} color="#0D9488" />
-                  </View>
-                  <View>
-                    <Text style={styles.cardTitle}>Blood Pressure Log</Text>
-                    <Text style={styles.cardSub}>Systolic / Diastolic mmHg trends</Text>
-                  </View>
-                </View>
+            {!!recordError && <Text accessibilityRole="alert" style={{ color: "#B91C1C", marginBottom: 16 }}>{recordError}</Text>}
+            
+            <BloodPressureChart visits={patientData?.prenatalVisits} />
 
-                {/* Filter Row: Day / Week / Month */}
-                <View style={styles.filterRow}>
-                  {(['day', 'week', 'month'] as BPFilter[]).map((filter) => (
-                    <TouchableOpacity
-                      key={filter}
-                      onPress={() => setBpFilter(filter)}
-                      style={[styles.filterButton, bpFilter === filter && styles.filterButtonActive]}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={[styles.filterText, bpFilter === filter && styles.filterTextActive]}>
-                        {filter}
+            {/* Blood Pressure / Visit History List Section with Shrink & Modal support */}
+            <View style={styles.noticesContainerCard}>
+              <View style={styles.listHeaderRow}>
+                <Text style={styles.sectionTitle}>Blood Pressure History</Text>
+                {sortedVisits.length > 3 && (
+                  <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <TouchableOpacity onPress={() => setShowAllBpInline(!showAllBpInline)}>
+                      <Text style={styles.seeAllText}>
+                        {showAllBpInline ? 'Show less' : ''}
                       </Text>
                     </TouchableOpacity>
-                  ))}
-                </View>
+                    <TouchableOpacity onPress={() => setShowAllBpModal(true)}>
+                      <Text style={styles.seeAllText}>See all</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
 
-              {/* Simulated Line Graph Body */}
-              <View style={styles.graphContainer}>
-                <View style={styles.graphGridLines}>
-                  <View style={styles.gridLine}><Text style={styles.gridLabel}>140</Text></View>
-                  <View style={styles.gridLine}><Text style={styles.gridLabel}>120</Text></View>
-                  <View style={styles.gridLine}><Text style={styles.gridLabel}>100</Text></View>
-                  <View style={styles.gridLine}><Text style={styles.gridLabel}>80</Text></View>
-                </View>
-
-                <View style={styles.graphColumnsRow}>
-                  {bpPoints.map((item, index) => (
-                    <View key={index} style={styles.graphColumn}>
-                      <View style={styles.graphBarGroup}>
-                        <View style={[styles.graphPoint, { bottom: `${(item.systolic / 160) * 100}%`, backgroundColor: '#0D9488' }]} />
-                        <View style={[styles.graphPoint, { bottom: `${(item.diastolic / 160) * 100}%`, backgroundColor: '#38BDF8' }]} />
-                      </View>
-                      <Text style={styles.graphColumnLabel}>{item.label}</Text>
+              {sortedVisits.length ? (
+                displayedVisits.map((visit: any, index: number) => (
+                  <View key={visit.id || index} style={styles.noticeCard}>
+                    <View style={styles.noticeIconBox}>
+                      <Ionicons name="pulse" size={20} color="#0D9488" />
                     </View>
-                  ))}
+                    <View style={styles.noticeContent}>
+                      <Text style={styles.noticeTitle}>
+                        BP: {visit.bloodPressure || visit.bp || 'N/A'}
+                      </Text>
+                      <Text style={styles.noticeSub}>
+                        Date: {visit.date || visit.visitDate || 'Not recorded'} {visit.weight ? `• Weight: ${visit.weight}` : ''}
+                      </Text>
+                    </View>
+                  </View>
+                ))
+              ) : (
+                <View style={[styles.noticeCard, { borderWidth: 0 }]}>
+                  <View style={styles.noticeIconBox}>
+                    <Ionicons name="information-circle" size={20} color="#0284C7" />
+                  </View>
+                  <View style={styles.noticeContent}>
+                    <Text style={styles.noticeTitle}>No blood pressure records</Text>
+                    <Text style={styles.noticeSub}>Your historical blood pressure readings from clinic visits will appear here.</Text>
+                  </View>
                 </View>
-              </View>
-
-              <View style={styles.graphLegendRow}>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendDot, { backgroundColor: '#0D9488' }]} />
-                  <Text style={styles.legendText}>Systolic</Text>
-                </View>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendDot, { backgroundColor: '#38BDF8' }]} />
-                  <Text style={styles.legendText}>Diastolic</Text>
-                </View>
-              </View>
+              )}
             </View>
 
             {/* My Care Hub Card Shortcut */}
@@ -250,7 +228,7 @@ export default function PatientHomeScreen() {
                 </View>
                 <View>
                   <Text style={styles.shortcutTitle}>My Care Hub</Text>
-                  <Text style={styles.shortcutSub}>View care plans, visit recaps, and preparation</Text>
+                  <Text style={styles.shortcutSub}>Documents, care plans and visit recaps</Text>
                 </View>
               </View>
               <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
@@ -293,16 +271,138 @@ export default function PatientHomeScreen() {
               </View>
             </TouchableOpacity>
 
-            {/* Clinic Notices Section */}
-            <View style={styles.listHeaderRow}>
-              <Text style={styles.sectionTitle}>Clinic Notices</Text>
-            </View>
+            {/* Clinic Notices Section Container with Shrink & Modal support */}
+            <View style={styles.noticesContainerCard}>
+              <View style={styles.listHeaderRow}>
+                <Text style={styles.sectionTitle}>Clinic Notices</Text>
+                {combinedClinicNotices.length > 3 && (
+                  <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <TouchableOpacity onPress={() => setShowAllNoticesInline(!showAllNoticesInline)}>
+                      <Text style={styles.seeAllText}>
+                        {showAllNoticesInline ? 'Show less' : ''}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setShowAllNoticesModal(true)}>
+                      <Text style={styles.seeAllText}>See all</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
 
-            {clinicNotices.length ? clinicNotices.map((notice: any) => <View key={notice.id} style={[styles.noticeCard, notice.priority === 'urgent' && styles.urgentNoticeCard]}><View style={[styles.noticeIconBox, notice.priority === 'urgent' && styles.urgentNoticeIcon]}><Ionicons name={notice.priority === 'urgent' ? 'warning' : 'information-circle'} size={20} color={notice.priority === 'urgent' ? '#DC2626' : '#0284C7'} /></View><View style={styles.noticeContent}><Text style={styles.noticeTitle}>{notice.priority === 'urgent' ? 'Urgent Clinic Reminder' : 'Clinic Reminder'}</Text><Text style={styles.noticeSub}>{notice.title} · {notice.date} {notice.time}</Text></View></View>) : <View style={styles.noticeCard}><View style={styles.noticeIconBox}><Ionicons name="information-circle" size={20} color="#0284C7" /></View><View style={styles.noticeContent}><Text style={styles.noticeTitle}>No new clinic notices</Text><Text style={styles.noticeSub}>Staff reminders will appear here automatically.</Text></View></View>}
+              {combinedClinicNotices.length ? (
+                displayedNotices.map((notice: any) => (
+                  <View 
+                    key={notice.id} 
+                    style={[
+                      styles.noticeCard, 
+                      notice.priority === 'urgent' && styles.urgentNoticeCard
+                    ]}
+                  >
+                    <View style={[styles.noticeIconBox, notice.priority === 'urgent' && styles.urgentNoticeIcon]}>
+                      <Ionicons name={notice.priority === 'urgent' ? 'warning' : 'information-circle'} size={20} color={notice.priority === 'urgent' ? '#DC2626' : '#0284C7'} />
+                    </View>
+                    <View style={styles.noticeContent}>
+                      <Text style={styles.noticeTitle}>
+                        {notice.priority === 'urgent' ? 'Urgent Clinic Reminder' : notice.kind || 'Clinic Reminder'}
+                      </Text>
+                      <Text style={styles.noticeSub}>{notice.title} • {notice.date} {notice.time}</Text>
+                      {!!notice.detail && <Text style={[styles.noticeSub, { marginTop: 6 }]}>{notice.detail}</Text>}
+                    </View>
+                  </View>
+                ))
+              ) : (
+                <View style={[styles.noticeCard, { borderWidth: 0 }]}>
+                  <View style={styles.noticeIconBox}>
+                    <Ionicons name="information-circle" size={20} color="#0284C7" />
+                  </View>
+                  <View style={styles.noticeContent}>
+                    <Text style={styles.noticeTitle}>No new clinic notices</Text>
+                    <Text style={styles.noticeSub}>Staff reminders, checkups and medical history updates appear here automatically.</Text>
+                  </View>
+                </View>
+              )}
+            </View>
           </>
         )}
 
       </ScrollView>
+
+      {/* Full History Modal for Blood Pressure */}
+      <Modal
+        visible={showAllBpModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowAllBpModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContentContainer}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>All Blood Pressure History</Text>
+              <TouchableOpacity onPress={() => setShowAllBpModal(false)}>
+                <Ionicons name="close" size={22} color="#0F172A" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView contentContainerStyle={styles.modalScrollContent} showsVerticalScrollIndicator={false}>
+              {sortedVisits.map((visit: any, index: number) => (
+                <View key={visit.id || index} style={styles.noticeCard}>
+                  <View style={styles.noticeIconBox}>
+                    <Ionicons name="pulse" size={20} color="#0D9488" />
+                  </View>
+                  <View style={styles.noticeContent}>
+                    <Text style={styles.noticeTitle}>
+                      BP: {visit.bloodPressure || visit.bp || 'N/A'}
+                    </Text>
+                    <Text style={styles.noticeSub}>
+                      Date: {visit.date || visit.visitDate || 'Not recorded'} {visit.weight ? `• Weight: ${visit.weight}` : ''}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Full History Modal for Clinic Notices */}
+      <Modal
+        visible={showAllNoticesModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowAllNoticesModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContentContainer}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>All Clinic Notices</Text>
+              <TouchableOpacity onPress={() => setShowAllNoticesModal(false)}>
+                <Ionicons name="close" size={22} color="#0F172A" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView contentContainerStyle={styles.modalScrollContent} showsVerticalScrollIndicator={false}>
+              {combinedClinicNotices.map((notice: any) => (
+                <View 
+                  key={notice.id} 
+                  style={[
+                    styles.noticeCard, 
+                    notice.priority === 'urgent' && styles.urgentNoticeCard
+                  ]}
+                >
+                  <View style={[styles.noticeIconBox, notice.priority === 'urgent' && styles.urgentNoticeIcon]}>
+                    <Ionicons name={notice.priority === 'urgent' ? 'warning' : 'information-circle'} size={20} color={notice.priority === 'urgent' ? '#DC2626' : '#0284C7'} />
+                  </View>
+                  <View style={styles.noticeContent}>
+                    <Text style={styles.noticeTitle}>
+                      {notice.priority === 'urgent' ? 'Urgent Clinic Reminder' : notice.kind || 'Clinic Reminder'}
+                    </Text>
+                    <Text style={styles.noticeSub}>{notice.title} • {notice.date} {notice.time}</Text>
+                    {!!notice.detail && <Text style={[styles.noticeSub, { marginTop: 6 }]}>{notice.detail}</Text>}
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
     </SafeAreaView>
   );
@@ -466,161 +566,29 @@ const styles = StyleSheet.create({
     color: '#99F6E4',
     textAlign: 'right',
   },
-  card: {
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  seeAllText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0D9488',
+  },
+  noticesContainerCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
-    padding: 18,
+    padding: 16,
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    marginBottom: 20,
+    marginTop: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.03,
     shadowRadius: 4,
     elevation: 1,
-  },
-  cardHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  cardTitleBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  cardIconBox: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: '#CCFBF1',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  cardTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  cardSub: {
-    fontSize: 11,
-    color: '#64748B',
-    marginTop: 1,
-  },
-  filterRow: {
-    flexDirection: 'row',
-    backgroundColor: '#F1F5F9',
-    borderRadius: 8,
-    padding: 3,
-    gap: 2,
-  },
-  filterButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
-  },
-  filterButtonActive: {
-    backgroundColor: '#0D9488',
-  },
-  filterText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#64748B',
-    textTransform: 'capitalize',
-  },
-  filterTextActive: {
-    color: '#FFFFFF',
-  },
-  graphContainer: {
-    height: 130,
-    position: 'relative',
-    justifyContent: 'flex-end',
-    paddingBottom: 20,
-    marginBottom: 8,
-  },
-  graphGridLines: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 20,
-    justifyContent: 'space-between',
-  },
-  gridLine: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-    width: '100%',
-    height: '25%',
-  },
-  gridLabel: {
-    fontSize: 9,
-    color: '#94A3B8',
-    position: 'absolute',
-    top: -6,
-    left: 0,
-  },
-  graphColumnsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'flex-end',
-    height: '100%',
-    paddingLeft: 24,
-  },
-  graphColumn: {
-    alignItems: 'center',
-    flex: 1,
-    height: '100%',
-    justifyContent: 'flex-end',
-  },
-  graphBarGroup: {
-    width: 8,
-    height: '100%',
-    position: 'relative',
-  },
-  graphPoint: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    position: 'absolute',
-    left: 0,
-  },
-  graphColumnLabel: {
-    fontSize: 10,
-    color: '#64748B',
-    marginTop: 6,
-    fontWeight: '600',
-  },
-  graphLegendRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
-    paddingTop: 12,
-  },
-  legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  legendDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  legendText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#475569',
-  },
-  sectionTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#0F172A',
-    marginBottom: 12,
+    gap: 12,
   },
   myCareCard: {
     backgroundColor: '#FFFFFF',
@@ -631,6 +599,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     borderWidth: 1,
     borderColor: '#E2E8F0',
+    marginTop: 16,
     marginBottom: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -707,30 +676,26 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   listHeaderRow: {
-    marginTop: 16,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 4,
   },
   noticeCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 16,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 14,
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.03,
-    shadowRadius: 4,
-    elevation: 1,
+    marginBottom: 8,
   },
   urgentNoticeCard: { borderColor: '#FECACA', backgroundColor: '#FFF7F7' },
   noticeIconBox: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     backgroundColor: '#E0F2FE',
     justifyContent: 'center',
     alignItems: 'center',
@@ -750,5 +715,34 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#64748B',
     lineHeight: 16,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContentContainer: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+    paddingBottom: 12,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  modalScrollContent: {
+    paddingBottom: 20,
   },
 });

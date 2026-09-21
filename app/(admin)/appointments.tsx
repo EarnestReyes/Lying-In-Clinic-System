@@ -17,9 +17,10 @@ import { useRouter } from 'expo-router';
 
 // Import appointment service functions and model
 import { 
-  getAppointments, 
   createAppointment, 
   assertAppointmentSlotAvailable,
+  subscribeAppointments,
+  reviewAppointment,
   updateAppointment, 
   deleteAppointment,
 } from '../../src/services/appointmentService'; 
@@ -41,6 +42,9 @@ export default function AppointmentsScreen() {
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
+  const [reviewMode, setReviewMode] = useState<'approve' | 'cancel' | null>(null);
+  const [cancellationReason, setCancellationReason] = useState('');
 
   // New Appointment Form State
   const [formPatientName, setFormPatientName] = useState('');
@@ -62,31 +66,30 @@ export default function AppointmentsScreen() {
   const formatDate = (date: Date) => date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const clockPositions = [{ h: 12, x: 82, y: 4 }, { h: 1, x: 126, y: 16 }, { h: 2, x: 154, y: 47 }, { h: 3, x: 164, y: 84 }, { h: 4, x: 154, y: 122 }, { h: 5, x: 126, y: 151 }, { h: 6, x: 82, y: 162 }, { h: 7, x: 38, y: 151 }, { h: 8, x: 10, y: 122 }, { h: 9, x: 0, y: 84 }, { h: 10, x: 10, y: 47 }, { h: 11, x: 38, y: 16 }];
 
-  // Fetch appointments on load
   useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-      const [appointmentData, patientSnapshot] = await Promise.all([
-        getAppointments(),
-        fetchPatients(),
-      ]);
-      setAppointments(appointmentData);
-      setPatients(patientSnapshot.map((patient) => ({
+    let active = true;
+    fetchPatients().then(patientSnapshot => {
+      if (!active) return;
+      setPatients(patientSnapshot.map(patient => ({
         id: patient.id,
         name: patient.name || patient.firstName || 'Unnamed patient',
         contactNumber: patient.contactNumber,
       })));
-    } catch (error) {
-      console.error("Error fetching appointments:", error);
-      Alert.alert("Error", "Failed to load appointments from database.");
-    } finally {
+    }).catch(error => {
+      console.error('Error fetching patients:', error);
+      Alert.alert('Error', 'Failed to load patient options.');
+    });
+    const unsubscribe = subscribeAppointments(items => {
+      setAppointments(items);
+      setSelectedAppointment(current => current ? items.find(item => item.id === current.id) ?? null : null);
       setLoading(false);
-    }
-  };
+    }, error => {
+      console.error('Error subscribing to appointments:', error);
+      setLoading(false);
+      Alert.alert('Error', 'Failed to load appointments from database.');
+    });
+    return () => { active = false; unsubscribe(); };
+  }, []);
 
   // Handle Creating New Appointment
   const handleCreate = async () => {
@@ -117,7 +120,6 @@ export default function AppointmentsScreen() {
       
       setModalVisible(false);
       clearForm();
-      fetchData(); 
     } catch (error) {
       console.error("Error creating appointment:", error);
       Alert.alert("Error", "Could not create appointment.");
@@ -129,11 +131,31 @@ export default function AppointmentsScreen() {
   // Handle Status Update
   const handleUpdateStatus = async (id: string, newStatus: AppointmentStatus) => {
     try {
+      setActionLoading(true);
       await updateAppointment(id, { status: newStatus });
-      fetchData(); 
     } catch (error) {
       console.error("Error updating status:", error);
       Alert.alert("Error", "Could not update appointment status.");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleReview = async (decision: 'confirmed' | 'cancelled') => {
+    if (!selectedAppointment?.id || actionLoading) return;
+    if (decision === 'cancelled' && !cancellationReason.trim()) {
+      Alert.alert('Reason required', 'Enter a reason for cancelling this appointment.');
+      return;
+    }
+    try {
+      setActionLoading(true);
+      await reviewAppointment(selectedAppointment.id, decision, cancellationReason);
+      setReviewMode(null);
+      setCancellationReason('');
+    } catch (error) {
+      Alert.alert('Unable to update appointment', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -158,8 +180,7 @@ export default function AppointmentsScreen() {
             try {
               setActionLoading(true);
               await deleteAppointment(id);
-              console.log("Successfully deleted from Firestore, refreshing list...");
-              fetchData(); 
+              setSelectedAppointment(null);
             } catch (error: any) {
               console.error("Error deleting appointment from database:", error);
               Alert.alert("Error", `Could not delete appointment: ${error?.message || error}`);
@@ -183,11 +204,22 @@ export default function AppointmentsScreen() {
   };
 
   const getStatusColor = (status?: AppointmentStatus | string) => {
-    switch (status) {
-      case 'Completed': return '#10B981'; 
-      case 'Cancelled': return '#EF4444'; 
-      case 'Scheduled':
-      default: return '#3B82F6'; 
+    switch (String(status || '').toLowerCase()) {
+      case 'pending': return '#D97706';
+      case 'confirmed': return '#059669';
+      case 'completed': return '#2563EB';
+      case 'cancelled': return '#DC2626';
+      default: return '#3B82F6';
+    }
+  };
+
+  const getStatusLabel = (status?: AppointmentStatus | string) => {
+    switch (String(status || '').toLowerCase()) {
+      case 'pending': return 'Pending';
+      case 'confirmed': return 'Approved';
+      case 'completed': return 'Completed';
+      case 'cancelled': return 'Cancelled';
+      default: return 'Scheduled';
     }
   };
 
@@ -202,10 +234,14 @@ export default function AppointmentsScreen() {
                           sName.toLowerCase().includes(searchQuery.toLowerCase());
                           
     if (activeTab === 'All') return matchesSearch;
-    return matchesSearch && String(apt.status) === activeTab;
+    return matchesSearch && getStatusLabel(apt.status) === activeTab;
   });
 
   const selectedPatient = patients.find((patient) => patient.id === formPatientId);
+  const selectedStatus = getStatusLabel(selectedAppointment?.status);
+  const selectedStatusColor = getStatusColor(selectedAppointment?.status);
+  const selectedIsPending = ['pending', 'requested'].includes(String(selectedAppointment?.status || '').toLowerCase());
+  const selectedService = selectedAppointment?.service || selectedAppointment?.purpose || 'General Consultation';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -259,7 +295,7 @@ export default function AppointmentsScreen() {
             </View>
 
             <View style={styles.tabRow}>
-              {['All', 'Scheduled', 'Completed', 'Cancelled'].map(tab => (
+              {['All', 'Pending', 'Approved', 'Scheduled', 'Completed', 'Cancelled'].map(tab => (
                 <TouchableOpacity
                   key={tab}
                   style={[styles.tabButton, activeTab === tab && styles.tabButtonActive]}
@@ -282,9 +318,10 @@ export default function AppointmentsScreen() {
                 {filteredAppointments.length > 0 ? (
                   filteredAppointments.map(apt => {
                     const statusColor = getStatusColor(apt.status);
-                    const serviceVal = (apt as any).service || (apt as any).type || 'General Consultation';
+                    const serviceVal = apt.service || apt.purpose || 'General Consultation';
+                    const statusLabel = getStatusLabel(apt.status);
                     return (
-                      <View key={apt.id} style={styles.appointmentCard}>
+                      <TouchableOpacity key={apt.id} style={styles.appointmentCard} activeOpacity={0.78} onPress={() => setSelectedAppointment(apt)}>
                         <View style={styles.cardHeader}>
                           <View style={styles.itemInfoWrapper}>
                             <View style={styles.itemIconBox}>
@@ -296,13 +333,13 @@ export default function AppointmentsScreen() {
                                 <Text style={styles.aptDate}>• {apt.appointmentDate}</Text>
                               </View>
                               <Text style={styles.patientName}>{apt.patientName}</Text>
-                              {(apt as any).patientContact ? <Text style={styles.patientContact}>Phone: {(apt as any).patientContact}</Text> : null}
+                              {apt.patientContact ? <Text style={styles.patientContact}>Phone: {apt.patientContact}</Text> : null}
                             </View>
                           </View>
                           
                           <View style={[styles.statusBadge, { backgroundColor: `${statusColor}15` }]}>
                             <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-                            <Text style={[styles.statusText, { color: statusColor }]}>{apt.status || 'Scheduled'}</Text>
+                            <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text>
                           </View>
                         </View>
 
@@ -315,28 +352,9 @@ export default function AppointmentsScreen() {
                             <Text style={styles.midwifeText}>Notes / Details: <Text style={{ fontWeight: '700', color: '#0F172A' }}>{apt.notes || 'N/A'}</Text></Text>
                           </View>
 
-                          <View style={{ alignItems: 'flex-end', gap: 6 }}>
-                            <View style={{ flexDirection: 'row', gap: 8 }}>
-                              {String(apt.status) !== 'Completed' && (
-                                <TouchableOpacity 
-                                  style={[styles.actionButtonSecondary, { borderColor: '#10B981' }]} 
-                                  activeOpacity={0.7}
-                                  onPress={() => handleUpdateStatus(apt.id!, 'Completed' as AppointmentStatus)}
-                                >
-                                  <Text style={[styles.actionButtonSecondaryText, { color: '#10B981' }]}>Complete</Text>
-                                </TouchableOpacity>
-                              )}
-                              <TouchableOpacity 
-                                style={[styles.actionButtonSecondary, { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5' }]} 
-                                activeOpacity={0.7}
-                                onPress={() => handleDelete(apt.id!)}
-                              >
-                                <Text style={[styles.actionButtonSecondaryText, { color: '#DC2626' }]}>Delete</Text>
-                              </TouchableOpacity>
-                            </View>
-                          </View>
+                          <View style={styles.openDetails}><Text style={styles.openDetailsText}>View details</Text><Ionicons name="chevron-forward" size={16} color="#0D9488" /></View>
                         </View>
-                      </View>
+                      </TouchableOpacity>
                     );
                   })
                 ) : (
@@ -353,6 +371,83 @@ export default function AppointmentsScreen() {
         </View>
 
       </View>
+
+      <Modal visible={!!selectedAppointment && !reviewMode} animationType="fade" transparent onRequestClose={() => setSelectedAppointment(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.detailModalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Appointment Details</Text>
+              <TouchableOpacity accessibilityLabel="Close appointment details" hitSlop={10} onPress={() => setSelectedAppointment(null)}>
+                <Ionicons name="close" size={21} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+            <ScrollView contentContainerStyle={styles.detailList}>
+              <AppointmentDetail label="Patient" value={selectedAppointment?.patientName} />
+              <View style={styles.detailColumns}>
+                <AppointmentDetail label="Date" value={selectedAppointment?.appointmentDate || selectedAppointment?.date} />
+                <AppointmentDetail label="Time" value={selectedAppointment?.appointmentTime || selectedAppointment?.time} />
+              </View>
+              <AppointmentDetail label="Service" value={selectedService} />
+              {!!selectedAppointment?.notes && <AppointmentDetail label="Reason / Notes" value={selectedAppointment.notes} />}
+              <View style={styles.detailField}>
+                <Text style={styles.detailLabel}>Status</Text>
+                <View style={[styles.statusBadge, styles.detailStatus, { backgroundColor: `${selectedStatusColor}15` }]}>
+                  <View style={[styles.statusDot, { backgroundColor: selectedStatusColor }]} />
+                  <Text style={[styles.statusText, { color: selectedStatusColor }]}>{selectedStatus}</Text>
+                </View>
+              </View>
+              {!!selectedAppointment?.createdAt && <AppointmentDetail label="Date Requested" value={formatTimestamp(selectedAppointment.createdAt)} />}
+              {selectedStatus === 'Cancelled' && !!selectedAppointment?.cancellationReason && <AppointmentDetail label="Cancellation Reason" value={selectedAppointment.cancellationReason} />}
+            </ScrollView>
+            <View style={styles.detailActions}>
+              <TouchableOpacity style={styles.deleteDetailButton} disabled={actionLoading} onPress={() => selectedAppointment?.id && handleDelete(selectedAppointment.id)}>
+                <Text style={styles.deleteDetailText}>Delete</Text>
+              </TouchableOpacity>
+              {selectedIsPending && <>
+                <TouchableOpacity style={styles.cancelAppointmentButton} disabled={actionLoading} onPress={() => { setCancellationReason(''); setReviewMode('cancel'); }}>
+                  <Text style={styles.cancelAppointmentText}>Cancel Appointment</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.approveButton} disabled={actionLoading} onPress={() => setReviewMode('approve')}>
+                  <Text style={styles.approveButtonText}>Approve</Text>
+                </TouchableOpacity>
+              </>}
+              {!selectedIsPending && ['Approved', 'Scheduled'].includes(selectedStatus) && <TouchableOpacity style={styles.approveButton} disabled={actionLoading} onPress={() => selectedAppointment?.id && handleUpdateStatus(selectedAppointment.id, 'completed')}>
+                {actionLoading ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.approveButtonText}>Mark Completed</Text>}
+              </TouchableOpacity>}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={reviewMode === 'approve'} animationType="fade" transparent onRequestClose={() => setReviewMode(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.confirmModalContent}>
+            <View style={styles.confirmIcon}><Ionicons name="checkmark-circle-outline" size={25} color="#059669" /></View>
+            <Text style={styles.confirmTitle}>Approve Appointment?</Text>
+            <Text style={styles.confirmText}>Confirm this patient's appointment for:</Text>
+            <Text style={styles.confirmSchedule}>{selectedAppointment?.appointmentDate}{'\n'}{selectedAppointment?.appointmentTime}</Text>
+            <View style={styles.confirmActions}>
+              <TouchableOpacity style={styles.modalCancelButton} disabled={actionLoading} onPress={() => setReviewMode(null)}><Text style={styles.modalCancelText}>Back</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.approveButton} disabled={actionLoading} onPress={() => void handleReview('confirmed')}>{actionLoading ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={styles.approveButtonText}>Approve</Text>}</TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={reviewMode === 'cancel'} animationType="fade" transparent onRequestClose={() => setReviewMode(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.cancelModalContent}>
+            <View style={styles.modalHeader}><Text style={styles.modalTitle}>Cancel Appointment</Text><TouchableOpacity hitSlop={10} onPress={() => setReviewMode(null)}><Ionicons name="close" size={21} color="#64748B" /></TouchableOpacity></View>
+            <Text style={styles.cancelHelp}>Please provide a reason for cancelling this appointment.</Text>
+            <Text style={styles.inputLabel}>Reason *</Text>
+            <TextInput style={[styles.modalInput, styles.reasonInput]} value={cancellationReason} onChangeText={setCancellationReason} multiline textAlignVertical="top" placeholder="The clinic is fully booked for the selected schedule." />
+            <View style={styles.confirmActions}>
+              <TouchableOpacity style={styles.modalCancelButton} disabled={actionLoading} onPress={() => setReviewMode(null)}><Text style={styles.modalCancelText}>Go Back</Text></TouchableOpacity>
+              <TouchableOpacity style={[styles.cancelAppointmentButton, !cancellationReason.trim() && styles.disabledButton]} disabled={actionLoading || !cancellationReason.trim()} onPress={() => void handleReview('cancelled')}>{actionLoading ? <ActivityIndicator size="small" color="#DC2626" /> : <Text style={styles.cancelAppointmentText}>Cancel Appointment</Text>}</TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={modalVisible} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
@@ -451,6 +546,18 @@ export default function AppointmentsScreen() {
 
     </SafeAreaView>
   );
+}
+
+function AppointmentDetail({ label, value }: { label: string; value?: string }) {
+  if (!value) return null;
+  return <View style={styles.detailField}><Text style={styles.detailLabel}>{label}</Text><Text style={styles.detailValue}>{value}</Text></View>;
+}
+
+function formatTimestamp(value: unknown): string {
+  const firestoreDate = typeof value === 'object' && value !== null && 'toDate' in value
+    ? (value as { toDate(): Date }).toDate()
+    : new Date(String(value));
+  return Number.isNaN(firestoreDate.getTime()) ? '' : firestoreDate.toLocaleString();
 }
 
 const styles = StyleSheet.create({
@@ -696,6 +803,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748B',
   },
+  openDetails: { flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 14 },
+  openDetailsText: { color: '#0D9488', fontSize: 12, fontWeight: '700' },
   actionButtonSecondary: {
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -733,6 +842,32 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 450,
   },
+  detailModalContent: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24, width: '100%', maxWidth: 560, maxHeight: '86%' },
+  detailList: { gap: 15, paddingBottom: 4 },
+  detailColumns: { flexDirection: 'row', gap: 18 },
+  detailField: { flex: 1, minWidth: 0 },
+  detailLabel: { color: '#94A3B8', fontSize: 11, fontWeight: '700', textTransform: 'uppercase', marginBottom: 4 },
+  detailValue: { color: '#0F172A', fontSize: 14, lineHeight: 20, fontWeight: '600' },
+  detailStatus: { alignSelf: 'flex-start' },
+  detailActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 9, paddingTop: 18, marginTop: 16, borderTopWidth: 1, borderTopColor: '#E2E8F0' },
+  approveButton: { minHeight: 40, paddingHorizontal: 18, paddingVertical: 10, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0D9488' },
+  approveButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  cancelAppointmentButton: { minHeight: 40, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FEE2E2', borderWidth: 1, borderColor: '#FCA5A5' },
+  cancelAppointmentText: { color: '#DC2626', fontSize: 13, fontWeight: '700' },
+  deleteDetailButton: { minHeight: 40, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 9, alignItems: 'center', justifyContent: 'center', marginRight: 'auto' },
+  deleteDetailText: { color: '#64748B', fontSize: 12, fontWeight: '700' },
+  confirmModalContent: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24, width: '100%', maxWidth: 410, alignItems: 'center' },
+  confirmIcon: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#ECFDF5', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  confirmTitle: { color: '#0F172A', fontSize: 18, fontWeight: '800' },
+  confirmText: { color: '#64748B', fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 8 },
+  confirmSchedule: { color: '#0F172A', fontSize: 15, lineHeight: 23, textAlign: 'center', fontWeight: '800', marginTop: 10 },
+  confirmActions: { flexDirection: 'row', gap: 10, justifyContent: 'flex-end', alignSelf: 'stretch', marginTop: 20 },
+  modalCancelButton: { minHeight: 40, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F5F9', borderWidth: 1, borderColor: '#E2E8F0' },
+  modalCancelText: { color: '#64748B', fontSize: 13, fontWeight: '700' },
+  cancelModalContent: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24, width: '100%', maxWidth: 500 },
+  cancelHelp: { color: '#64748B', fontSize: 13, lineHeight: 19, marginBottom: 16 },
+  reasonInput: { minHeight: 105 },
+  disabledButton: { opacity: 0.5 },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',

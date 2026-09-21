@@ -49,7 +49,7 @@ function validQueueEntry(id) {
 }
 match /queueTickets/{id} {
   // Contains no names, user IDs, contact details, or appointment details.
-  allow read: if queueSignedIn();
+  allow read: if queueStaff() || (queueSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'patient');
   allow create: if queueSignedIn() &&
     request.resource.data.keys().hasOnly(['day', 'status', 'checkedInAt']) &&
     request.resource.data.status == 'Waiting' && request.resource.data.day == queueToday() &&

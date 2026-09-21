@@ -290,7 +290,13 @@ export default function PatientsListScreen() {
                     <View style={styles.cardHeader}>
                       <View style={styles.patientInfoWrapper}>
                         <View style={styles.avatarPlaceholder}>
-                          {patient.profileImage ? <Image source={{ uri: patient.profileImage }} style={styles.avatarImage} /> : <Text style={styles.avatarText}>{patient.name?.charAt(0)}</Text>}
+                          {patient.profileImage && patient.profileImage.trim() !== '' ? (
+                            <Image source={{ uri: patient.profileImage }} style={styles.avatarImage} />
+                          ) : (
+                            <Text style={styles.avatarText}>
+                              {patient.name ? patient.name.charAt(0).toUpperCase() : 'P'}
+                            </Text>
+                          )}
                         </View>
                         <View>
                           <Text style={styles.patientName}>{patient.name}</Text>
@@ -319,7 +325,7 @@ export default function PatientsListScreen() {
                     <View style={styles.cardFooter}>
                       <View style={styles.footerInfoItem}>
                         <Ionicons name="call-outline" size={14} color="#64748B" />
-                        <Text style={styles.footerInfoText}>{patient.contactNumber || 'N/A'}</Text>
+                        <Text style={styles.footerInfoText}>{patient.contactNumber || patient.phone || 'N/A'}</Text>
                       </View>
                       <View style={styles.footerInfoItem}>
                         <Ionicons name="water-outline" size={14} color="#64748B" />
@@ -483,7 +489,7 @@ const styles = StyleSheet.create({
   patientCard: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 18, marginBottom: 12, borderWidth: 1, borderColor: '#E2E8F0' },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   patientInfoWrapper: { flexDirection: 'row', alignItems: 'center' },
-  avatarPlaceholder: { width: 48, height: 48, borderRadius: 14, backgroundColor: '#CCFBF1', justifyContent: 'center', alignItems: 'center', marginRight: 14 },
+  avatarPlaceholder: { width: 48, height: 48, borderRadius: 14, backgroundColor: '#CCFBF1', justifyContent: 'center', alignItems: 'center', marginRight: 14, overflow: 'hidden' },
   avatarImage: { width: 48, height: 48, borderRadius: 14 },
   avatarText: { fontSize: 18, fontWeight: '800', color: '#0D9488' },
   patientName: { fontSize: 15, fontWeight: '700', color: '#0F172A' },

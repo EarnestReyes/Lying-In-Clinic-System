@@ -1,9 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Appointment } from '../../src/models/Appointment';
+import { AppointmentDetails } from '../../components/AppointmentDetails';
+import { appointmentMillis } from '../../src/utils/patientAppointments';
+import { useAuth } from '../../src/hooks/useAuth';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   Text,
   View,
-  SafeAreaView,
+  KeyboardAvoidingView,
+  Platform,
   StatusBar,
   TouchableOpacity,
   ScrollView,
@@ -20,8 +26,13 @@ import { QueueButton } from '../../components/QueueUI';
 
 export default function PatientAppointmentsScreen() {
   const router = useRouter();
+  const { userName } = useAuth();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [retry, setRetry] = useState(0);
+
   
-  const [appointments, setAppointments] = useState<any[]>([]);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   
@@ -30,28 +41,35 @@ export default function PatientAppointmentsScreen() {
   const [preferredTime, setPreferredTime] = useState('');
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const bookingLock = useRef(false);
 
   const patientUid = auth.currentUser?.uid;
 
   useEffect(() => {
     if (!patientUid) { setLoading(false); return; }
     setLoading(true);
-    return subscribePatientAppointments(patientUid, (records) => { setAppointments(records); setLoading(false); }, (error) => { console.error('Error fetching appointments:', error); setLoading(false); });
-  }, [patientUid]);
+    return subscribePatientAppointments(patientUid, (records) => { setAppointments(records.sort((a,b) => (appointmentMillis(a) || 0) - (appointmentMillis(b) || 0))); setError(''); setLoading(false); }, (error) => { setError('Unable to load appointments. Please retry.'); setLoading(false); });
+  }, [patientUid, retry]);
 
   // Handle booking a new appointment request
   const handleBookAppointment = async () => {
+    if (bookingLock.current) return;
     if (!patientUid || !preferredDate || !preferredTime) {
       Alert.alert("Missing Fields", "Please provide both a preferred date and time.");
       return;
     }
 
+    if (!(appointmentMillis({ appointmentDate: preferredDate, appointmentTime: preferredTime }) > Date.now())) {
+      Alert.alert('Invalid date or time', 'Enter a future date (YYYY-MM-DD) and time (10:00 AM).');
+      return;
+    }
+    bookingLock.current = true;
     try {
       setSubmitting(true);
       await createAppointment({
         patientUid,
         patientId: patientUid,
-        patientName: 'Patient',
+        patientName: userName || 'Patient',
         appointmentDate: preferredDate,
         appointmentTime: preferredTime,
         notes: notes,
@@ -68,6 +86,7 @@ export default function PatientAppointmentsScreen() {
       console.error("Error booking appointment:", error);
       Alert.alert("Error", "Failed to submit appointment request.");
     } finally {
+      bookingLock.current = false;
       setSubmitting(false);
     }
   };
@@ -94,6 +113,7 @@ export default function PatientAppointmentsScreen() {
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <QueueButton label="Check In / My Queue" onPress={() => router.push('/check-in')} />
         
+        {!!error && <><Text style={{ color: "#B91C1C" }}>{error}</Text><QueueButton label="Retry" onPress={() => setRetry(v => v + 1)} /></>}
         {loading ? (
           <View style={styles.loaderContainer}>
             <ActivityIndicator size="large" color="#0D9488" />
@@ -111,12 +131,12 @@ export default function PatientAppointmentsScreen() {
               <View style={styles.cardHeaderRow}>
                 <View style={styles.badgeRow}>
                   <Ionicons name="time-outline" size={14} color="#0D9488" />
-                  <Text style={styles.badgeText}>{item.status || 'Confirmed'}</Text>
+                  <Text style={styles.badgeText}>{item.status || 'Not recorded'}</Text>
                 </View>
               <Text style={styles.timeText}>{item.appointmentTime || item.time}</Text>
               </View>
 
-              <Text style={styles.appointmentType}>{item.purpose || item.type || 'Prenatal Consultation'}</Text>
+              <Text style={styles.appointmentType}>{item.purpose || item.service || 'Prenatal Consultation'}</Text>
               <Text style={styles.appointmentDate}>
                 <Ionicons name="calendar" size={13} color="#64748B" /> {item.appointmentDate || item.date}
               </Text>
@@ -129,6 +149,7 @@ export default function PatientAppointmentsScreen() {
 
       </ScrollView>
 
+      {appointments.find(item => item.id === selectedId) && <AppointmentDetails key={selectedId} item={appointments.find(item => item.id === selectedId)!} close={() => setSelectedId(null)} />}
       {/* Request Appointment Modal */}
       <Modal
         animationType="slide"
@@ -136,8 +157,8 @@ export default function PatientAppointmentsScreen() {
         visible={modalVisible}
         onRequestClose={() => setModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+        <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+          <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
             <View style={styles.modalHeaderRow}>
               <Text style={styles.modalTitle}>Request Appointment</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
@@ -145,7 +166,7 @@ export default function PatientAppointmentsScreen() {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.inputLabel}>Preferred Date (e.g., Oct 15, 2026)</Text>
+            <Text style={styles.inputLabel}>Preferred Date (YYYY-MM-DD)</Text>
             <TextInput
               style={styles.input}
               placeholder="Enter date"
@@ -184,8 +205,8 @@ export default function PatientAppointmentsScreen() {
                 <Text style={styles.submitButtonText}>Submit Request</Text>
               )}
             </TouchableOpacity>
-          </View>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );

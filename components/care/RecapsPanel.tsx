@@ -22,7 +22,7 @@ export function RecapsPanel({ patientId, recaps, drafts, staff, busy, run }: { p
     {staff && drafts.map(draft => <CareCard key={draft.id} title={`Draft · ${draft.visitDate}`}>
       <Text style={s.text}>{draft.summary}</Text><Text style={s.text}>{draft.instructions}</Text><Text style={s.muted}>Next visit: {draft.nextVisit || 'Not specified'}</Text>
       <View style={s.row}><CareButton label="Edit draft" secondary disabled={busy} onPress={() => { setEditId(draft.id); setForm({ visitDate: draft.visitDate, summary: draft.summary, instructions: draft.instructions, nextVisit: draft.nextVisit }); }} />
-        <CareButton label="Approve & share" disabled={busy || editId === draft.id} onPress={() => { void run(() => publishRecap(patientId, draft.id), 'Approved recap is now visible to the patient.'); }} /></View>
+        <CareButton label="Approve & share" disabled={busy || editId === draft.id} onPress={() => { void run(() => publishRecap(patientId, draft.id, draft), 'Approved recap is now visible to the patient.'); }} /></View>
     </CareCard>)}
     {!recaps.length && <CareCard title="No approved recaps yet" subtitle="A visit recap will appear here after clinic staff review and approve it." />}
     {[...recaps].sort((a, b) => b.visitDate.localeCompare(a.visitDate)).map(recap => <CareCard key={recap.id} title={recap.visitDate}>

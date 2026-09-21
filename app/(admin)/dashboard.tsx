@@ -15,7 +15,6 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { PatientRecordSearch } from '../../components/PatientRecordSearch';
 import { CLINIC } from '../../src/config/clinic';
 import { Colors } from '../../src/theme/colors';
 import { ClinicLocation } from '../../src/models/ClinicLocation';
@@ -23,7 +22,7 @@ import { subscribeClinicLocation } from '../../src/services/clinicLocationServic
 
 import { fetchPatients } from '../../src/services/patientService';
 import { sendReminderToPatient } from '../../src/(patient)/remindersService';
-import { subscribeDashboardPatients, subscribeDashboardReminders } from '../../src/services/dashboardService';
+import { subscribeDashboardPatients } from '../../src/services/dashboardService';
 import { subscribeQueue } from '../../src/services/queueService';
 import { useClinicDay } from '../../src/hooks/useClinicDay';
 
@@ -56,8 +55,6 @@ export default function AdminDashboard() {
   });
   const [dashboardStats, setDashboardStats] = useState({ monthlyAdmissions: [] as { label: string; count: number }[], averageBmi: null as number | null, bmiCount: 0, bmiLabel: 'No BMI data' });
   const [admissionPeriod, setAdmissionPeriod] = useState<AdmissionPeriod>('month');
-  const [reminders, setReminders] = useState<any[]>([]);
-  const [showNotifications, setShowNotifications] = useState(false);
   const [showQuickReminder, setShowQuickReminder] = useState(false);
   const [quickTitle, setQuickTitle] = useState('');
   const [quickPatient, setQuickPatient] = useState<any>(null);
@@ -144,7 +141,6 @@ export default function AdminDashboard() {
     }
   }, [admissionPeriod, queueDay]);
 
-  useEffect(() => subscribeDashboardReminders(setReminders, console.error), []);
   useEffect(() => subscribeClinicLocation(setClinicLocation, console.error), []);
   const openQuickReminder = async () => { const patients = await fetchPatients(); if (!patients.length) return Alert.alert('No patients', 'Add a patient before sending a reminder.'); setQuickPatients(patients); setQuickPatient(null); setQuickSearch(''); setQuickUrgent(false); setQuickTitle(''); setShowQuickReminder(true); };
   const sendQuickReminder = async () => { if (!quickPatient || !quickTitle.trim()) return; await sendReminderToPatient({ patientUid: quickPatient.id, patientId: quickPatient.id, title: quickTitle.trim(), date: new Date().toLocaleDateString('en-US'), time: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), type: 'General', priority: quickUrgent ? 'urgent' : 'normal' }); setShowQuickReminder(false); };
@@ -159,29 +155,6 @@ export default function AdminDashboard() {
         {/* Main Content Area */}
         <View style={styles.mainContent}>
           
-          {/* Top Navigation Bar */}
-          <View style={styles.topNavbar}>
-            <PatientRecordSearch />
-
-            <View style={styles.topNavRight}>
-              <TouchableOpacity style={styles.topIconButton} onPress={() => setShowNotifications(true)}>
-                <Ionicons name="notifications-outline" size={18} color="#64748B" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.topIconButton} onPress={openQuickReminder}>
-                <Ionicons name="chatbubble-ellipses-outline" size={18} color="#64748B" />
-              </TouchableOpacity>
-              <View style={styles.adminProfileBadge}>
-                <View style={styles.avatarPlaceholder}>
-                  <Ionicons name="person" size={14} color="#0D9488" />
-                </View>
-                <View>
-                  <Text style={styles.adminName}>Midwife Admin</Text>
-                  <Text style={styles.adminRole}>Lying-In Staff</Text>
-                </View>
-              </View>
-            </View>
-          </View>
-
           {/* Scrollable Dashboard Body */}
           <ScrollView contentContainerStyle={styles.scrollBody} showsVerticalScrollIndicator={false}>
             
@@ -327,7 +300,6 @@ export default function AdminDashboard() {
 
       </View>
 
-      <Modal visible={showNotifications} transparent animationType="fade"><View style={styles.modalOverlay}><View style={styles.notificationModal}><Text style={styles.cardTitle}>Sent Reminders</Text>{reminders.length ? reminders.map((item) => <View key={item.id} style={styles.reminderRow}><Text style={styles.reminderTitle}>{item.title}</Text><Text style={styles.reminderStatus}>{item.completed ? 'Completed' : 'Pending'} · {item.patientUid}</Text></View>) : <Text style={styles.cardSub}>No reminders sent yet.</Text>}<TouchableOpacity style={styles.closeModal} onPress={() => setShowNotifications(false)}><Text style={styles.closeModalText}>Close</Text></TouchableOpacity></View></View></Modal>
       <Modal visible={showQuickReminder} transparent animationType="fade"><View style={styles.modalOverlay}><View style={styles.notificationModal}><Text style={styles.cardTitle}>Quick Send Reminder</Text><TextInput value={quickSearch} onChangeText={setQuickSearch} placeholder="Search patient name" style={styles.quickInput} />{quickSearch ? quickPatients.filter((patient) => String(patient.name || patient.fullName || '').toLowerCase().includes(quickSearch.toLowerCase())).slice(0, 4).map((patient) => <TouchableOpacity key={patient.id} style={styles.reminderRow} onPress={() => { setQuickPatient(patient); setQuickSearch(patient.name || patient.fullName); }}><Text style={styles.reminderTitle}>{patient.name || patient.fullName}</Text><Text style={styles.reminderStatus}>{patient.contactNumber || 'No phone number'}</Text></TouchableOpacity>) : null}<TextInput value={quickTitle} onChangeText={setQuickTitle} placeholder="Reminder message" style={styles.quickInput} /><TouchableOpacity style={[styles.urgentButton, quickUrgent && styles.urgentButtonActive]} onPress={() => setQuickUrgent(!quickUrgent)}><Text style={styles.urgentText}>{quickUrgent ? 'Urgent reminder' : 'Normal reminder'}</Text></TouchableOpacity><TouchableOpacity style={styles.closeModal} onPress={sendQuickReminder}><Text style={styles.closeModalText}>Send Reminder</Text></TouchableOpacity></View></View></Modal>
     </SafeAreaView>
   );
@@ -346,72 +318,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F8FAFC',
     flexDirection: 'column',
-  },
-  topNavbar: {
-    position: 'relative', zIndex: 100, elevation: 100,
-    height: 70,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 30,
-  },
-  searchBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F1F5F9',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    height: 40,
-    width: 300,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 13,
-    color: '#0F172A',
-  },
-  topNavRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  topIconButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: '#F8FAFC',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  adminProfileBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginLeft: 8,
-    paddingLeft: 12,
-    borderLeftWidth: 1,
-    borderLeftColor: '#E2E8F0',
-    gap: 10,
-  },
-  avatarPlaceholder: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#CCFBF1',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  adminName: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0F172A',
-  },
-  adminRole: {
-    fontSize: 11,
-    color: '#64748B',
   },
   scrollBody: {
     padding: 30,

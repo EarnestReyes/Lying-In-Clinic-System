@@ -5,6 +5,9 @@ export interface User {
   email: string;
   fullName: string;
   phone?: string;
+  profileImage?: string;
   role: UserRole;
+  permissionsOnboardingCompleted?: boolean;
+  permissionsOnboardingCompletedAt?: string;
   createdAt?: any;
 }

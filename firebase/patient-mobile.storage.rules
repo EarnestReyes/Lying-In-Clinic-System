@@ -1,0 +1,20 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function staff() {
+      return request.auth != null && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['admin', 'staff', 'midwife'];
+    }
+    function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+    match /patients/{uid}/documents/{id}/{name} {
+      allow read: if owner(uid) || staff();
+      allow create: if owner(uid) && request.resource.size > 0 && request.resource.size <= 10 * 1024 * 1024 && request.resource.contentType in ['application/pdf', 'image/jpeg', 'image/png'];
+      // Allows rollback only when metadata creation fails. Submitted documents cannot be deleted by patients.
+      allow delete: if owner(uid) && !firestore.exists(/databases/(default)/documents/care/$(uid)/documents/$(id));
+      allow update: if false;
+    }
+    match /patients/{uid}/profile/{name} {
+      allow read: if owner(uid) || staff();
+      allow create, update: if owner(uid) && request.resource.size > 0 && request.resource.size <= 10 * 1024 * 1024 && request.resource.contentType in ['image/jpeg', 'image/png'];
+    }
+  }
+}

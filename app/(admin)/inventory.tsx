@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -11,18 +11,26 @@ import {
   ActivityIndicator,
   Modal,
   Alert,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
 // Import Firebase and your Inventory Service / Models
 import { addInventoryItem, deleteInventoryItem, restockInventoryItem, subscribeInventoryItems } from '../../src/services/inventoryService';
-import { InventoryItem } from '../../src/models/inventory';
+import { INVENTORY_UNIT_TYPES, InventoryItem } from '../../src/models/inventory';
 import { PatientRecordSearch } from '../../components/PatientRecordSearch';
+import { CalendarDatePicker } from '../../components/CalendarDatePicker';
 import { Picker } from '@react-native-picker/picker';
+
+const STOCK_OPTIONS = [0, 5, 10, 20, 25, 50, 75, 100, 150, 200, 500];
+const RESTOCK_OPTIONS = [1, 5, 10, 20, 25, 50, 75, 100, 150, 200, 500];
 
 export default function InventoryScreen() {
   const router = useRouter();
+  const { width } = useWindowDimensions();
+  const compactForm = width < 820;
+  const actionLock = useRef(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('All');
   
@@ -34,6 +42,7 @@ export default function InventoryScreen() {
 
   // New Item Form States
   const [formItemName, setFormItemName] = useState('');
+  const [formSupplier, setFormSupplier] = useState('');
   const [formCategory, setFormCategory] = useState('Vitamins & Supplements');
   const [formStock, setFormStock] = useState('');
   const [formUnit, setFormUnit] = useState('');
@@ -46,6 +55,7 @@ export default function InventoryScreen() {
   const [restockExpiry, setRestockExpiry] = useState('');
   const [restockDate, setRestockDate] = useState('');
   const [archiveItem, setArchiveItem] = useState<InventoryItem | null>(null);
+  const [datePickerTarget, setDatePickerTarget] = useState<'add' | 'restock' | null>(null);
 
   // Hook up real-time Firestore synchronization listener
   useEffect(() => {
@@ -72,6 +82,7 @@ export default function InventoryScreen() {
         category: data.category || 'General',
         stock: stockCount,
         unit: data.unit || 'units',
+        supplier: data.supplier,
         minThreshold: threshold,
         status: stockCount <= threshold ? 'Low Stock' : 'In Stock',
         statusColor: stockCount <= threshold ? '#EF4444' : '#10B981',
@@ -83,8 +94,9 @@ export default function InventoryScreen() {
 
   // Handle saving a new inventory item using inventoryService
   const handleAddItem = async () => {
-    if (!formItemName || !formStock || !formUnit) {
-      Alert.alert("Missing Fields", "Please provide the item name, stock count, and unit type.");
+    if (actionLock.current) return;
+    if (!formItemName.trim() || !formCategory || formStock === '' || !formUnit || formThreshold === '' || !formRestocked) {
+      Alert.alert("Missing Fields", "Provide the item name, category, stock count, unit type, minimum threshold, and restock date.");
       return;
     }
 
@@ -93,14 +105,17 @@ export default function InventoryScreen() {
       return;
     }
     try {
+      actionLock.current = true;
       setActionLoading(true);
       await addInventoryItem({
-        itemName: formItemName,
+        itemName: formItemName.trim(),
+        supplier: formSupplier.trim() || undefined,
         category: formCategory,
         stock: Number(formStock),
         unit: formUnit,
-        minThreshold: Number(formThreshold) || 10,
-        lastRestocked: formRestocked || 'Today',
+        minThreshold: Number(formThreshold),
+        lastRestocked: formRestocked,
+        isActive: true,
       });
 
       setModalVisible(false);
@@ -124,20 +139,27 @@ export default function InventoryScreen() {
   };
 
   const handleRestock = async () => {
+    if (actionLock.current) return;
     const quantity = Number(restockQuantity);
     if (!restockItem || !Number.isFinite(quantity) || quantity <= 0) {
       Alert.alert('Invalid quantity', 'Enter a restock quantity greater than zero.');
       return;
     }
+    if (!restockDate) {
+      Alert.alert('Restock date required', 'Select the date for this restock.');
+      return;
+    }
     try {
+      actionLock.current = true;
       setActionLoading(true);
-      await restockInventoryItem(restockItem.id, { quantity, restockDate: restockDate || 'Today', supplier: restockSupplier.trim() || undefined, batchNumber: restockBatch.trim() || undefined, expirationDate: restockExpiry.trim() || undefined });
+      await restockInventoryItem(restockItem.id, { quantity, restockDate, supplier: restockSupplier.trim() || undefined, batchNumber: restockBatch.trim() || undefined, expirationDate: restockExpiry.trim() || undefined });
       setRestockItem(null);
       Alert.alert('Restock recorded', `${quantity} ${restockItem.unit} added to ${restockItem.itemName}.`);
     } catch (error) {
       console.error('Error restocking inventory:', error);
       Alert.alert('Unable to restock', 'The stock update was not saved. Please try again.');
     } finally {
+      actionLock.current = false;
       setActionLoading(false);
     }
   };
@@ -153,12 +175,14 @@ export default function InventoryScreen() {
       console.error('Error archiving inventory:', error);
       Alert.alert('Unable to archive', 'The inventory item was not archived. Please try again.');
     } finally {
+      actionLock.current = false;
       setActionLoading(false);
     }
   };
 
   const clearForm = () => {
     setFormItemName('');
+    setFormSupplier('');
     setFormCategory('Vitamins & Supplements');
     setFormStock('');
     setFormUnit('');
@@ -318,7 +342,7 @@ export default function InventoryScreen() {
       {/* Add New Inventory Modal */}
       <Modal visible={modalVisible} animationType="slide" transparent={true}>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, styles.addModalContent]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Add Inventory Item</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
@@ -326,8 +350,9 @@ export default function InventoryScreen() {
               </TouchableOpacity>
             </View>
 
-            <ScrollView contentContainerStyle={{ gap: 12 }}>
-              <View>
+            <ScrollView contentContainerStyle={styles.formContent}>
+              <View style={[styles.formRow, compactForm && styles.formRowCompact]}>
+              <View style={styles.formField}>
                 <Text style={styles.inputLabel}>Item Name *</Text>
                 <TextInput 
                   style={styles.modalInput} 
@@ -336,54 +361,43 @@ export default function InventoryScreen() {
                   onChangeText={setFormItemName}
                 />
               </View>
+              <View style={styles.formField}>
+                <Text style={styles.inputLabel}>Supplier</Text>
+                <TextInput style={styles.modalInput} placeholder="Supplier name" value={formSupplier} onChangeText={setFormSupplier} />
+              </View>
+              </View>
 
-              <View>
-                <Text style={styles.inputLabel}>Category</Text>
+              <View style={[styles.formRow, compactForm && styles.formRowCompact]}>
+              <View style={styles.formField}>
+                <Text style={styles.inputLabel}>Category *</Text>
                 <View style={styles.modalPicker}><Picker selectedValue={formCategory} onValueChange={setFormCategory} style={styles.picker}>{['Vitamins & Supplements', 'Vaccines', 'Equipment & Supplies', 'PPE & Consumables', 'Emergency Medications', 'General'].map((category) => <Picker.Item key={category} label={category} value={category} />)}</Picker></View>
               </View>
-
-              <View style={{ flexDirection: 'row', gap: 10 }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.inputLabel}>Stock Count *</Text>
-                  <TextInput 
-                    style={styles.modalInput} 
-                    placeholder="e.g. 100"
-                    keyboardType="numeric"
-                    value={formStock}
-                    onChangeText={setFormStock}
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.inputLabel}>Unit Type *</Text>
-                  <TextInput 
-                    style={styles.modalInput} 
-                    placeholder="e.g. bottles / boxes"
-                    value={formUnit}
-                    onChangeText={setFormUnit}
-                  />
-                </View>
+              <View style={styles.formField}>
+                <Text style={styles.inputLabel}>Unit Type *</Text>
+                <View style={styles.modalPicker}><Picker selectedValue={formUnit} onValueChange={setFormUnit} style={styles.picker}><Picker.Item label="Select unit type" value="" />{INVENTORY_UNIT_TYPES.map(unit => <Picker.Item key={unit} label={unit} value={unit} />)}</Picker></View>
+              </View>
               </View>
 
-              <View style={{ flexDirection: 'row', gap: 10 }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.inputLabel}>Min Threshold</Text>
+              <View style={[styles.formRow, compactForm && styles.formRowCompact]}>
+                <View style={styles.formField}>
+                  <Text style={styles.inputLabel}>Stock Count *</Text>
+                  <View style={styles.modalPicker}><Picker selectedValue={formStock} onValueChange={setFormStock} style={styles.picker}><Picker.Item label="Select stock count" value="" />{STOCK_OPTIONS.map(value => <Picker.Item key={value} label={String(value)} value={String(value)} />)}</Picker></View>
+                </View>
+                <View style={styles.formField}>
+                  <Text style={styles.inputLabel}>Minimum Threshold *</Text>
                   <TextInput 
                     style={styles.modalInput} 
-                    placeholder="e.g. 15"
+                    placeholder="e.g. 10"
                     keyboardType="numeric"
                     value={formThreshold}
                     onChangeText={setFormThreshold}
                   />
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.inputLabel}>Last Restocked</Text>
-                  <TextInput 
-                    style={styles.modalInput} 
-                    placeholder="e.g. Sep 15, 2026"
-                    value={formRestocked}
-                    onChangeText={setFormRestocked}
-                  />
-                </View>
+              </View>
+
+              <View style={styles.formField}>
+                <Text style={styles.inputLabel}>Restock Date *</Text>
+                <TouchableOpacity style={styles.dateInput} onPress={() => setDatePickerTarget('add')}><Ionicons name="calendar-outline" size={17} color="#0D9488" /><Text style={[styles.dateInputText, !formRestocked && styles.placeholderText]}>{formRestocked || 'Select date'}</Text></TouchableOpacity>
               </View>
 
               <TouchableOpacity 
@@ -405,10 +419,11 @@ export default function InventoryScreen() {
       <Modal visible={!!restockItem} animationType="slide" transparent onRequestClose={() => setRestockItem(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <View style={styles.modalHeader}><View><Text style={styles.modalTitle}>Restock Item</Text><Text style={styles.modalSubtitle}>{restockItem?.itemName} · Current stock: {restockItem?.stock} {restockItem?.unit}</Text></View><TouchableOpacity onPress={() => setRestockItem(null)} disabled={actionLoading}><Ionicons name="close" size={20} color="#64748B" /></TouchableOpacity></View>
-            <ScrollView contentContainerStyle={{ gap: 12 }}>
-              <View><Text style={styles.inputLabel}>Quantity to Add *</Text><TextInput style={styles.modalInput} value={restockQuantity} onChangeText={setRestockQuantity} keyboardType="numeric" placeholder={`Number of ${restockItem?.unit || 'units'}`} /></View>
-              <View><Text style={styles.inputLabel}>Restock Date</Text><TextInput style={styles.modalInput} value={restockDate} onChangeText={setRestockDate} placeholder="e.g. Sept 19, 2026" /></View>
+            <View style={styles.modalHeader}><View><Text style={styles.modalTitle}>Restock Item</Text><Text style={styles.modalSubtitle}>{restockItem?.itemName}</Text></View><TouchableOpacity onPress={() => setRestockItem(null)} disabled={actionLoading}><Ionicons name="close" size={20} color="#64748B" /></TouchableOpacity></View>
+            <ScrollView contentContainerStyle={styles.formContent}>
+              <View style={styles.currentStockPanel}><Text style={styles.detailCaption}>Current Stock</Text><Text style={styles.currentStockValue}>{restockItem?.stock} {restockItem?.unit}</Text></View>
+              <View><Text style={styles.inputLabel}>Quantity to Add *</Text><View style={styles.modalPicker}><Picker selectedValue={restockQuantity} onValueChange={setRestockQuantity} style={styles.picker}><Picker.Item label="Select quantity" value="" />{RESTOCK_OPTIONS.map(value => <Picker.Item key={value} label={String(value)} value={String(value)} />)}</Picker></View></View>
+              <View><Text style={styles.inputLabel}>Restock Date *</Text><TouchableOpacity style={styles.dateInput} onPress={() => setDatePickerTarget('restock')}><Ionicons name="calendar-outline" size={17} color="#0D9488" /><Text style={styles.dateInputText}>{restockDate || 'Select date'}</Text></TouchableOpacity></View>
               <View><Text style={styles.inputLabel}>Supplier (optional)</Text><TextInput style={styles.modalInput} value={restockSupplier} onChangeText={setRestockSupplier} placeholder="Supplier name" /></View>
               <View style={{ flexDirection: 'row', gap: 10 }}><View style={{ flex: 1 }}><Text style={styles.inputLabel}>Batch No. (optional)</Text><TextInput style={styles.modalInput} value={restockBatch} onChangeText={setRestockBatch} placeholder="Batch number" /></View><View style={{ flex: 1 }}><Text style={styles.inputLabel}>Expiration (optional)</Text><TextInput style={styles.modalInput} value={restockExpiry} onChangeText={setRestockExpiry} placeholder="Date" /></View></View>
               <TouchableOpacity style={styles.modalSubmitButton} onPress={handleRestock} disabled={actionLoading}>{actionLoading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.modalSubmitText}>Record Restock</Text>}</TouchableOpacity>
@@ -430,6 +445,13 @@ export default function InventoryScreen() {
           </View>
         </View>
       </Modal>
+
+      <CalendarDatePicker
+        visible={datePickerTarget !== null}
+        title={datePickerTarget === 'restock' ? 'Select Restock Date' : 'Select Initial Stock Date'}
+        onClose={() => setDatePickerTarget(null)}
+        onSelect={value => datePickerTarget === 'restock' ? setRestockDate(value) : setFormRestocked(value)}
+      />
 
     </SafeAreaView>
   );
@@ -711,6 +733,11 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 450,
   },
+  addModalContent: { maxWidth: 720, maxHeight: '88%' },
+  formContent: { gap: 12 },
+  formRow: { flexDirection: 'row', gap: 12 },
+  formRowCompact: { flexDirection: 'column' },
+  formField: { flex: 1, minWidth: 0 },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -745,6 +772,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#0F172A',
   },
+  dateInput: { height: 44, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: '#CFE8E5', borderRadius: 10, backgroundColor: '#F8FFFE' },
+  dateInputText: { color: '#0F172A', fontSize: 13 },
+  placeholderText: { color: '#94A3B8' },
+  currentStockPanel: { padding: 14, borderRadius: 10, backgroundColor: '#F0FDFA', borderWidth: 1, borderColor: '#99F6E4' },
+  detailCaption: { color: '#64748B', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
+  currentStockValue: { color: '#0F172A', fontSize: 18, fontWeight: '800', marginTop: 3 },
   modalSubmitButton: {
     backgroundColor: '#0D9488',
     borderRadius: 8,
