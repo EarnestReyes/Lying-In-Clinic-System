@@ -16,10 +16,38 @@ function activityDefinitionValid(a) {
     (a.verificationType != 'pose' || (a.targetRepetitions > 0 && a.rules is map)) &&
     (a.verificationType != 'timer' || a.targetDurationSeconds > 0);
 }
+// Strip catalog metadata when comparing immutable assignment snapshots.
+function activityCatalogDefinition(a) {
+  return { 'name': a.name, 'description': a.description, 'instructions': a.instructions,
+    'verificationType': a.verificationType, 'targetRepetitions': a.targetRepetitions,
+    'targetDurationSeconds': a.targetDurationSeconds, 'estimatedDurationSeconds': a.estimatedDurationSeconds,
+    'tutorialUrl': a.tutorialUrl, 'safetyNotice': a.safetyNotice, 'isActive': a.isActive,
+    'rules': a.get('rules', {}) };
+}
+function activityCatalogValid(a) {
+  return a.keys().hasOnly(['name', 'description', 'instructions', 'verificationType', 'targetRepetitions',
+    'targetDurationSeconds', 'estimatedDurationSeconds', 'tutorialUrl', 'safetyNotice', 'isActive', 'rules',
+    'createdBy', 'createdAt', 'updatedBy', 'updatedAt', 'assignmentRevision']) &&
+    activityDefinitionValid(activityCatalogDefinition(a));
+}
 match /activities/{id} {
   allow read: if activityStaff() || (activitySignedIn() && resource.data.isActive == true);
-  allow create: if activityStaff() && request.resource.data.createdBy == request.auth.uid && request.resource.data.createdAt == request.time;
-  allow update, delete: if activityStaff();
+  allow create: if activityStaff() && activityCatalogValid(request.resource.data) &&
+    request.resource.data.createdBy == request.auth.uid && request.resource.data.createdAt == request.time &&
+    request.resource.data.updatedBy == request.auth.uid && request.resource.data.updatedAt == request.time &&
+    request.resource.data.get('assignmentRevision', 0) == 0;
+  allow update: if activityStaff() && (
+    (request.resource.data.isActive == false &&
+      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isActive', 'updatedBy', 'updatedAt']) &&
+      request.resource.data.updatedBy == request.auth.uid && request.resource.data.updatedAt == request.time) ||
+    (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['assignmentRevision']) &&
+      request.resource.data.assignmentRevision == resource.data.get('assignmentRevision', 0) + 1) ||
+    (activityCatalogValid(request.resource.data) &&
+      request.resource.data.get('createdBy', null) == resource.data.get('createdBy', null) &&
+      request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null) &&
+      request.resource.data.get('assignmentRevision', 0) == resource.data.get('assignmentRevision', 0) &&
+      request.resource.data.updatedBy == request.auth.uid && request.resource.data.updatedAt == request.time));
+  allow delete: if false;
 }
 function activityLogMatches(id, a) {
   let log = getAfter(/databases/$(database)/documents/activityLogs/$(id)).data;
@@ -51,6 +79,9 @@ match /patientActivityAssignments/{id} {
     request.resource.data.assignedBy == request.auth.uid && request.resource.data.assignedAt == request.time && request.resource.data.updatedAt == request.time &&
     get(/databases/$(database)/documents/users/$(request.resource.data.patientUid)).data.role == 'patient' &&
     exists(/databases/$(database)/documents/activities/$(request.resource.data.activityId)) && activityDefinitionValid(request.resource.data.activity) &&
+    activityCatalogDefinition(request.resource.data.activity) == activityCatalogDefinition(get(/databases/$(database)/documents/activities/$(request.resource.data.activityId)).data) &&
+    getAfter(/databases/$(database)/documents/activities/$(request.resource.data.activityId)).data.assignmentRevision ==
+      get(/databases/$(database)/documents/activities/$(request.resource.data.activityId)).data.get('assignmentRevision', 0) + 1 &&
     request.resource.data.activity.isActive == true && request.resource.data.status == 'not_started' &&
     request.resource.data.completedRepetitions == 0 && request.resource.data.durationSeconds == 0 && request.resource.data.startedAt == null && request.resource.data.completedAt == null;
   allow update: if (activityPatient(resource.data.patientUid) && activityProgressValid(id)) ||

@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import PatientActivitiesPanel from '../../../components/activities/PatientActivitiesPanel';
 
 // Firebase Imports
 import { administerMedication } from '../../../src/services/medicationService';
@@ -431,7 +432,7 @@ export default function PatientDetailScreen() {
 
             {/* Navigation Tabs */}
             <View style={styles.tabRow}>
-              {['Medical History', 'Prenatal & Checkups', 'Financial Assistance'].map(tab => (
+              {['Medical History', 'Prenatal & Checkups', 'Financial Assistance', 'Activities'].map(tab => (
                 <TouchableOpacity
                   key={tab}
                   style={[styles.tabButton, activeTab === tab && styles.tabButtonActive]}
@@ -445,6 +446,7 @@ export default function PatientDetailScreen() {
             </View>
 
             {/* Tab Content Display */}
+            {activeTab === 'Activities' && <PatientActivitiesPanel key={`${patientId}:${patient.uid || ''}`} patient={patient} />}
             {activeTab === 'Medical History' && (
               <View style={styles.sectionContainer}>
                 <View style={styles.sectionHeaderRow}>
@@ -903,7 +905,7 @@ const styles = StyleSheet.create({
   profileActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   reminderButton: { backgroundColor: '#CCFBF1', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 9, borderRadius: 8 },
   reminderButtonText: { color: '#0D9488', fontSize: 12, fontWeight: '700' },
-  tabRow: { flexDirection: 'row', gap: 8, marginBottom: 20 },
+  tabRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
   tabButton: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0' },
   tabButtonActive: { backgroundColor: '#0D9488', borderColor: '#0D9488' },
   tabButtonText: { fontSize: 13, fontWeight: '600', color: '#64748B' },

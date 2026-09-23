@@ -14,6 +14,7 @@ export default function AdminLayout() {
             <Stack.Screen name="dashboard" />
             <Stack.Screen name="queue" />
             <Stack.Screen name="care" />
+            <Stack.Screen name="activity-library" />
             <Stack.Screen name="chatPatient" />
             <Stack.Screen name="patients/index" />
             <Stack.Screen name="patients/[id]" />

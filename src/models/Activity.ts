@@ -28,6 +28,16 @@ export interface ActivityAssignment {
   activity: ActivityDefinition;
   status: 'not_started' | 'in_progress' | 'completed';
   completedRepetitions: number; durationSeconds: number;
+  assignedAt?: Date | null; startedAt?: Date | null; completedAt?: Date | null;
+}
+export interface CatalogActivity extends ActivityDefinition { id: string; configurationError?: string }
+
+function timestampDate(value: unknown): Date | null {
+  if (value && typeof value === 'object' && 'toDate' in value && typeof value.toDate === 'function') {
+    const date: unknown = value.toDate();
+    if (date instanceof Date && Number.isFinite(date.getTime())) return date;
+  }
+  return null;
 }
 
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -47,5 +57,5 @@ export function validActivity(v: unknown): v is ActivityDefinition {
 }
 export function parseAssignment(id: string, v: unknown): ActivityAssignment {
   if (!object(v) || !validActivity(v.activity) || typeof v.patientUid !== 'string' || typeof v.activityId !== 'string' || typeof v.assignedBy !== 'string' || !['not_started', 'in_progress', 'completed'].includes(String(v.status)) || !integer(v.completedRepetitions) || !integer(v.durationSeconds)) throw Error('An activity has invalid configuration. Please contact the clinic.');
-  return { id, patientUid: v.patientUid, activityId: v.activityId, assignedBy: v.assignedBy, activity: v.activity, status: v.status as ActivityAssignment['status'], completedRepetitions: v.completedRepetitions, durationSeconds: v.durationSeconds };
+  return { id, patientUid: v.patientUid, activityId: v.activityId, assignedBy: v.assignedBy, activity: v.activity, status: v.status as ActivityAssignment['status'], completedRepetitions: v.completedRepetitions, durationSeconds: v.durationSeconds, assignedAt: timestampDate(v.assignedAt), startedAt: timestampDate(v.startedAt), completedAt: timestampDate(v.completedAt) };
 }

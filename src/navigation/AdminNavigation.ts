@@ -30,6 +30,7 @@ export const adminNavigation = new AdminNavigation([
   { label: 'Dashboard', path: '/dashboard', icon: 'grid-outline', section: 'Main Menu' },
   { label: 'Patients', path: '/patients', icon: 'people-outline', section: 'Main Menu' },
   { label: 'Patient Care', path: '/care', icon: 'heart-outline', section: 'Main Menu' },
+  { label: 'Activity Library', path: '/activity-library', icon: 'body-outline', section: 'Main Menu' },
   { label: 'Appointments', path: '/appointments', icon: 'calendar-outline', section: 'Main Menu' },
   { label: 'Live Queue / Clinic QR', path: '/queue', icon: 'list-outline', section: 'Main Menu' },
   { label: 'Inventory', path: '/inventory', icon: 'medkit-outline', section: 'Other Menu' },
