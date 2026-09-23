@@ -8,7 +8,10 @@
     "scheme": "lyinginsystem",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Use the camera for on-device movement detection during clinic-assigned activities. Video is not stored."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +21,8 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.CAMERA"
       ],
       "package": "com.earnest_dev.lyinginsystem"
     },

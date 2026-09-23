@@ -1,0 +1,70 @@
+// Merge inside match /databases/{database}/documents. Do not deploy this fragment alone.
+// Remove conflicting broad grants: Firestore ORs all matching allow expressions.
+function activitySignedIn() { return request.auth != null; }
+function activityStaff() {
+  return activitySignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'staff', 'midwife'];
+}
+function activityPatient(uid) {
+  return activitySignedIn() && request.auth.uid == uid && get(/databases/$(database)/documents/users/$(uid)).data.role == 'patient';
+}
+function activityDefinitionValid(a) {
+  return a.keys().hasOnly(['name', 'description', 'instructions', 'verificationType', 'targetRepetitions', 'targetDurationSeconds', 'estimatedDurationSeconds', 'tutorialUrl', 'safetyNotice', 'isActive', 'rules']) &&
+    a.name is string && a.name.size() > 0 && a.description is string && a.instructions is list && a.instructions.size() > 0 &&
+    a.verificationType in ['pose', 'timer', 'manual'] && a.isActive is bool && a.targetRepetitions is int && a.targetRepetitions >= 0 &&
+    a.targetDurationSeconds is int && a.targetDurationSeconds >= 0 && a.targetDurationSeconds <= 86400 && a.estimatedDurationSeconds is int && a.estimatedDurationSeconds >= 0 &&
+    a.tutorialUrl is string && a.safetyNotice is string &&
+    (a.verificationType != 'pose' || (a.targetRepetitions > 0 && a.rules is map)) &&
+    (a.verificationType != 'timer' || a.targetDurationSeconds > 0);
+}
+match /activities/{id} {
+  allow read: if activityStaff() || (activitySignedIn() && resource.data.isActive == true);
+  allow create: if activityStaff() && request.resource.data.createdBy == request.auth.uid && request.resource.data.createdAt == request.time;
+  allow update, delete: if activityStaff();
+}
+function activityLogMatches(id, a) {
+  let log = getAfter(/databases/$(database)/documents/activityLogs/$(id)).data;
+  return log.patientUid == a.patientUid && log.assignmentId == id && log.activityId == a.activityId &&
+    log.verificationType == a.activity.verificationType && log.targetRepetitions == a.activity.targetRepetitions &&
+    log.targetDurationSeconds == a.activity.targetDurationSeconds && log.completedRepetitions == a.completedRepetitions &&
+    log.durationSeconds == a.durationSeconds && log.startedAt == a.startedAt && log.completedAt == request.time && log.status == 'completed';
+}
+function activityProgressValid(id) {
+  let before = resource.data;
+  let after = request.resource.data;
+  let a = before.activity;
+  return before.status != 'completed' && a.isActive == true &&
+    after.diff(before).affectedKeys().hasOnly(['status', 'completedRepetitions', 'durationSeconds', 'startedAt', 'completedAt', 'updatedAt']) &&
+    after.status in ['in_progress', 'completed'] && after.updatedAt == request.time &&
+    after.startedAt == (before.startedAt == null ? request.time : before.startedAt) &&
+    after.completedRepetitions is int && after.completedRepetitions >= before.completedRepetitions &&
+    after.durationSeconds is int && after.durationSeconds >= before.durationSeconds && after.durationSeconds <= 86400 &&
+    (a.verificationType == 'pose' ? after.completedRepetitions <= a.targetRepetitions : after.completedRepetitions == 0) &&
+    (after.status == 'completed' ?
+      (after.completedAt == request.time && activityLogMatches(id, after) &&
+        (a.verificationType != 'pose' || after.completedRepetitions == a.targetRepetitions) &&
+        (a.verificationType != 'timer' || after.durationSeconds >= a.targetDurationSeconds)) : after.completedAt == null);
+}
+match /patientActivityAssignments/{id} {
+  allow read: if activityStaff() || activityPatient(resource.data.patientUid);
+  allow create: if activityStaff() &&
+    request.resource.data.keys().hasOnly(['patientUid', 'activityId', 'activity', 'assignedBy', 'assignedAt', 'status', 'completedRepetitions', 'durationSeconds', 'startedAt', 'completedAt', 'updatedAt']) &&
+    request.resource.data.assignedBy == request.auth.uid && request.resource.data.assignedAt == request.time && request.resource.data.updatedAt == request.time &&
+    get(/databases/$(database)/documents/users/$(request.resource.data.patientUid)).data.role == 'patient' &&
+    exists(/databases/$(database)/documents/activities/$(request.resource.data.activityId)) && activityDefinitionValid(request.resource.data.activity) &&
+    request.resource.data.activity.isActive == true && request.resource.data.status == 'not_started' &&
+    request.resource.data.completedRepetitions == 0 && request.resource.data.durationSeconds == 0 && request.resource.data.startedAt == null && request.resource.data.completedAt == null;
+  allow update: if (activityPatient(resource.data.patientUid) && activityProgressValid(id)) ||
+    (activityStaff() && resource.data.status != 'completed' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['activity', 'updatedAt']) &&
+      request.resource.data.activity.diff(resource.data.activity).affectedKeys().hasOnly(['isActive']) &&
+      request.resource.data.activity.isActive is bool && request.resource.data.updatedAt == request.time);
+  allow delete: if false;
+}
+match /activityLogs/{id} {
+  allow read: if activityStaff() || activityPatient(resource.data.patientUid);
+  allow create: if activityPatient(request.resource.data.patientUid) &&
+    request.resource.data.keys().hasOnly(['patientUid', 'assignmentId', 'activityId', 'verificationType', 'targetRepetitions', 'targetDurationSeconds', 'completedRepetitions', 'durationSeconds', 'startedAt', 'completedAt', 'status']) &&
+    get(/databases/$(database)/documents/patientActivityAssignments/$(id)).data.status != 'completed' &&
+    getAfter(/databases/$(database)/documents/patientActivityAssignments/$(id)).data.status == 'completed' &&
+    activityLogMatches(id, getAfter(/databases/$(database)/documents/patientActivityAssignments/$(id)).data);
+  allow update, delete: if false;
+}

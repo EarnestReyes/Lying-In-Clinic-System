@@ -1,0 +1,5 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": { "modules": ["PrenatalPoseModule"] },
+  "android": { "modules": ["expo.modules.prenatalpose.PrenatalPoseModule"] }
+}

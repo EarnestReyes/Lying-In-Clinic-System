@@ -45,7 +45,7 @@ export default function PatientTabLayout() {
       tabBar={(props) => (
         props.state.routes[props.state.index]?.name === 'permission-onboarding' ? null :
         <View style={styles.tabBarWrapper}>
-          {!['ai-chat', 'clinic-map'].includes(props.state.routes[props.state.index]?.name) && (
+          {!['ai-chat', 'clinic-map', 'activities'].includes(props.state.routes[props.state.index]?.name) && (
             <TouchableOpacity
               style={styles.supportButton}
               activeOpacity={0.9}
@@ -108,6 +108,7 @@ export default function PatientTabLayout() {
           ),
         }}
       />
+      <Tabs.Screen name="activities" options={{ title: 'Activities', tabBarIcon: ({ color }) => <Ionicons name="body-outline" size={22} color={color} /> }} />
       <Tabs.Screen
         name="profile"
         options={{

@@ -1,0 +1,7 @@
+{
+  "name": "prenatal-pose",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local live-camera ML Kit landmark bridge",
+  "license": "UNLICENSED"
+}

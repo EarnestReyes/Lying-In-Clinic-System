@@ -1,0 +1,22 @@
+{
+  "name": "Technical demo: elbow movement",
+  "description": "Technical test configuration only. Not a medically validated prenatal exercise. Clinic staff must supply and approve instructions before assigning.",
+  "instructions": [],
+  "verificationType": "pose",
+  "targetRepetitions": 3,
+  "targetDurationSeconds": 0,
+  "estimatedDurationSeconds": 0,
+  "tutorialUrl": "",
+  "safetyNotice": "Technical demo thresholds are configurable test values, not medically validated thresholds. Do not assign without clinic review.",
+  "isActive": false,
+  "rules": {
+    "movementType": "demo_left_elbow_cycle",
+    "requiredLandmarks": ["leftShoulder", "leftElbow", "leftWrist"],
+    "minConfidence": 0.7,
+    "holdMs": 300,
+    "maxFrameGapMs": 800,
+    "startConditions": [{ "points": ["leftShoulder", "leftElbow", "leftWrist"], "min": 150, "max": 180 }],
+    "targetConditions": [{ "points": ["leftShoulder", "leftElbow", "leftWrist"], "min": 45, "max": 100 }],
+    "returnConditions": [{ "points": ["leftShoulder", "leftElbow", "leftWrist"], "min": 150, "max": 180 }]
+  }
+}
